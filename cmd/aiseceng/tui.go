@@ -5,9 +5,12 @@ import (
 	"context"
 	"fmt"
 	"math/rand/v2"
+	"slices"
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/help"
+	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -36,6 +39,9 @@ const (
 )
 
 var tabNames = [...]string{"Events", "Jobs", "Chapters", "Join"}
+
+// openVerbs is what enter does on each tab, for the key bar.
+var openVerbs = [...]string{"rsvp", "apply", "chapter page", "open"}
 
 type joinLink struct{ label, about, url string }
 
@@ -104,6 +110,8 @@ type model struct {
 	// masks keeps the map's land per size, shared by every copy of the model.
 	masks map[[2]int]*landMask
 
+	bar help.Model
+
 	inSplash bool
 	frame    int
 	intro    int
@@ -118,6 +126,7 @@ func newModel(ctx context.Context) model {
 	m := model{
 		ctx:      ctx,
 		masks:    map[[2]int]*landMask{},
+		bar:      newKeyBar(),
 		inSplash: true,
 		ticking:  true,
 		rng:      rand.New(rand.NewPCG(1, 2)),
@@ -300,14 +309,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	key := msg.String()
-
-	if key == "ctrl+c" {
+	if key.Matches(msg, keys.ForceQuit) {
 		return m, tea.Quit
 	}
 
 	if m.inSplash {
-		if key == "q" || key == "esc" {
+		if key.Matches(msg, keys.Quit, keys.Clear) {
 			return m, tea.Quit
 		}
 
@@ -319,20 +326,23 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if input := m.input(); input != nil && input.Focused() {
-		switch key {
-		case "esc":
+		switch {
+		case key.Matches(msg, typingKeys.Clear):
 			input.SetValue("")
 			input.Blur()
 			m.resetCursor()
-		case "enter":
+		case key.Matches(msg, typingKeys.Done):
 			input.Blur()
-		case "up", "ctrl+p":
+		case key.Matches(msg, typingKeys.Up):
 			m.move(-1)
-		case "down", "ctrl+n":
+		case key.Matches(msg, typingKeys.Down):
 			m.move(1)
-		case "tab", "shift+tab":
+		case key.Matches(msg, typingKeys.NextTab):
 			input.Blur()
-			m.switchTab(key)
+			m.switchTab(1)
+		case key.Matches(msg, typingKeys.PrevTab):
+			input.Blur()
+			m.switchTab(-1)
 		default:
 			before := input.Value()
 
@@ -349,48 +359,50 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	switch key {
-	case "q":
+	switch {
+	case key.Matches(msg, keys.Quit):
 		return m, tea.Quit
-	case "tab", "shift+tab", "right", "left":
-		m.switchTab(key)
-	case "1", "2", "3", "4":
-		m.tab = tab(key[0] - '1')
-	case "/":
+	case key.Matches(msg, keys.NextTab):
+		m.switchTab(1)
+	case key.Matches(msg, keys.PrevTab):
+		m.switchTab(-1)
+	case key.Matches(msg, keys.JumpTab):
+		m.tab = tab(msg.String()[0] - '1')
+	case key.Matches(msg, keys.Search):
 		if input := m.input(); input != nil {
 			return m, input.Focus()
 		}
-	case "esc":
+	case key.Matches(msg, keys.Clear):
 		if input := m.input(); input != nil {
 			input.SetValue("")
 			m.resetCursor()
 		}
-	case "up", "k":
+	case key.Matches(msg, keys.Up):
 		m.move(-1)
-	case "down", "j":
+	case key.Matches(msg, keys.Down):
 		m.move(1)
-	case "pgup":
+	case key.Matches(msg, keys.PageUp):
 		m.move(-m.bodyHeight())
-	case "pgdown", "space":
+	case key.Matches(msg, keys.PageDown):
 		m.move(m.bodyHeight())
-	case "home", "g":
+	case key.Matches(msg, keys.Top):
 		m.move(-m.count())
-	case "end", "G":
+	case key.Matches(msg, keys.Bottom):
 		m.move(m.count())
-	case "enter":
+	case key.Matches(msg, keys.Open):
 		if url := m.selectedURL(); url != "" {
 			return m, open(url)
 		}
-	case "c":
+	case key.Matches(msg, keys.Copy):
 		if url := m.selectedURL(); url != "" {
 			m.status = "Copied " + displayURL(url)
 
 			return m, tea.SetClipboard(url)
 		}
-	case "r":
+	case key.Matches(msg, keys.Retry):
 		return m.retry()
-	case "l", "m":
-		if url := m.selectedListing(key); url != "" {
+	case key.Matches(msg, keys.Luma, keys.Meetup):
+		if url := m.selectedListing(msg); url != "" {
 			return m, open(url)
 		}
 	}
@@ -398,23 +410,23 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// selectedListing is the page `key` opens for the selection: an event's Luma
-// or Meetup listing (see linkKey), or a chapter's Meetup group on m. It is ""
+// selectedListing is the page msg opens for the selection: an event's Luma
+// or Meetup listing (see listingKey), or a chapter's Meetup group on m. It is ""
 // when the selection has no such page.
-func (m model) selectedListing(key string) string {
+func (m model) selectedListing(msg tea.KeyPressMsg) string {
 	i := m.cursor[m.tab]
 
 	switch m.tab {
 	case eventsTab:
 		if events := m.visibleEvents(); i < len(events) {
 			for _, link := range events[i].Links {
-				if linkKey(link) == key {
+				if b, ok := listingKey(link); ok && key.Matches(msg, b) {
 					return link.URL
 				}
 			}
 		}
 	case chaptersTab:
-		if chapters := m.visibleChapters(); i < len(chapters) && key == "m" {
+		if chapters := m.visibleChapters(); i < len(chapters) && key.Matches(msg, keys.Meetup) {
 			return deref(chapters[i].Meetup)
 		}
 	}
@@ -422,13 +434,9 @@ func (m model) selectedListing(key string) string {
 	return ""
 }
 
-func (m *model) switchTab(key string) {
-	step := 1
-	if key == "shift+tab" || key == "left" {
-		step = len(tabNames) - 1
-	}
-
-	m.tab = (m.tab + tab(step)) % tab(len(tabNames))
+// switchTab moves step tabs along, wrapping around.
+func (m *model) switchTab(step int) {
+	m.tab = (m.tab + tab(step+len(tabNames))) % tab(len(tabNames))
 }
 
 // retry rereads the current tab's feed after a failed read.
@@ -724,27 +732,30 @@ func (m model) keyBar() string {
 		return " " + whiteText.Render(m.status)
 	}
 
-	var pairs []string
+	move := relabel(keys.Down, "↑↓", "move")
 
-	switch {
-	case m.input() != nil && m.input().Focused():
-		pairs = []string{"↑↓", "move", "enter", "done", "esc", "clear"}
-	case m.tab == eventsTab:
-		pairs = []string{"↑↓", "move", "/", "search", "enter", "rsvp", "c", "copy link", "tab", "jobs", "q", "quit"}
-	case m.tab == jobsTab:
-		pairs = []string{"↑↓", "move", "/", "search", "enter", "apply", "c", "copy link", "tab", "chapters", "q", "quit"}
-	case m.tab == chaptersTab:
-		pairs = []string{"↑↓", "move", "/", "search", "enter", "chapter page", "c", "copy link", "tab", "join", "q", "quit"}
-	default:
-		pairs = []string{"↑↓", "move", "enter", "open", "c", "copy link", "tab", "events", "q", "quit"}
+	if input := m.input(); input != nil && input.Focused() {
+		return " " + m.bar.ShortHelpView([]key.Binding{move, typingKeys.Done, typingKeys.Clear})
 	}
 
-	parts := make([]string, 0, len(pairs)/2)
-	for i := 0; i < len(pairs); i += 2 {
-		parts = append(parts, whiteText.Render(pairs[i])+" "+mutedText.Render(pairs[i+1]))
+	next := tabNames[(int(m.tab)+1)%len(tabNames)]
+	bindings := []key.Binding{
+		move,
+		keys.Search,
+		relabel(keys.Open, "enter", openVerbs[m.tab]),
+		keys.Copy,
+		relabel(keys.NextTab, "tab", strings.ToLower(next)),
+		keys.Quit,
 	}
 
-	return " " + strings.Join(parts, "   ")
+	if m.tab == joinTab {
+		bindings = slices.Delete(bindings, 1, 2)
+	}
+
+	bar := m.bar
+	bar.SetWidth(m.width - 1)
+
+	return " " + bar.ShortHelpView(bindings)
 }
 
 // panes is the current tab's visible list rows and its detail.
@@ -921,8 +932,9 @@ func withActions(content []string, actions string, body int) []string {
 	return append(content, "", actions)
 }
 
-func action(key, label string) string {
-	return linkText.Render(key) + "  " + mutedText.Render(label)
+// action is one `key  label` of a detail pane's action line.
+func action(b key.Binding, label string) string {
+	return linkText.Render(b.Help().Key) + "  " + mutedText.Render(label)
 }
 
 func jobDetail(board Board, j Job, width, body int) []string {
@@ -943,7 +955,7 @@ func jobDetail(board Board, j Job, width, body int) []string {
 	)
 	lines = append(lines, wrapStyled(j.Description, width, secondaryText)...)
 
-	return withActions(lines, action("enter", "apply on "+hostOf(j.ApplyURL))+"   "+action("c", "copy link"), body)
+	return withActions(lines, action(keys.Open, "apply on "+hostOf(j.ApplyURL))+"   "+action(keys.Copy, "copy link"), body)
 }
 
 // mapDetail is a detail pane under the chapter map, with the selection's
@@ -999,19 +1011,19 @@ func eventDetail(e Event, width int) (lines []string, actions string) {
 
 	lines = append(lines, "")
 
-	keys := []string{action("enter", "rsvp on "+hostOf(e.URL))}
+	acts := []string{action(keys.Open, "rsvp on "+hostOf(e.URL))}
 
 	for i, link := range e.Links {
 		lines = append(lines, field(link.Label, displayURL(link.URL)))
 
 		if i == 0 {
-			keys[0] = action("enter", "rsvp on "+link.Label)
-		} else if key := linkKey(link); key != "" {
-			keys = append(keys, action(key, link.Label))
+			acts[0] = action(keys.Open, "rsvp on "+link.Label)
+		} else if b, ok := listingKey(link); ok {
+			acts = append(acts, action(b, link.Label))
 		}
 	}
 
-	return lines, strings.Join(append(keys, action("c", "copy link")), "   ")
+	return lines, strings.Join(append(acts, action(keys.Copy, "copy link")), "   ")
 }
 
 func chapterRow(c Chapter, next *Event, selected bool, width int) string {
@@ -1046,16 +1058,16 @@ func chapterDetail(c Chapter, next *Event, width int) (lines []string, actions s
 		}
 	}
 
-	keys := []string{action("enter", "chapter page")}
+	acts := []string{action(keys.Open, "chapter page")}
 
 	if c.Meetup != nil {
 		lines = append(lines, field("Meetup", displayURL(*c.Meetup)))
-		keys = append(keys, action("m", "Meetup group"))
+		acts = append(acts, action(keys.Meetup, "Meetup group"))
 	}
 
 	lines = append(lines, field("Page", displayURL(c.PageURL())))
 
-	return lines, strings.Join(append(keys, action("c", "copy link")), "   ")
+	return lines, strings.Join(append(acts, action(keys.Copy, "copy link")), "   ")
 }
 
 func joinDetail(link joinLink, width, body int) []string {
@@ -1065,7 +1077,7 @@ func joinDetail(link joinLink, width, body int) []string {
 
 	lines := []string{boldText.Render(link.label), secondaryText.Render(link.about), "", linkText.Render(displayURL(link.url))}
 
-	return withActions(lines, action("enter", "open in your browser"), body)
+	return withActions(lines, action(keys.Open, "open in your browser"), body)
 }
 
 // ---------- layout helpers ----------

@@ -2,7 +2,7 @@
 
 The [AI Security Engineers](https://www.aiseceng.io) community, from your terminal: upcoming meetups across every chapter, open roles from the job board, and every chapter on a map.
 
-Built with Charm's [Bubble Tea](https://github.com/charmbracelet/bubbletea), [Lip Gloss](https://github.com/charmbracelet/lipgloss) and [Fang](https://github.com/charmbracelet/fang).
+Built with Charm's [Bubble Tea](https://github.com/charmbracelet/bubbletea), [Bubbles](https://github.com/charmbracelet/bubbles), [Lip Gloss](https://github.com/charmbracelet/lipgloss) and [Fang](https://github.com/charmbracelet/fang).
 
 ## Install
 

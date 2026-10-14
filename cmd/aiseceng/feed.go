@@ -70,19 +70,6 @@ type EventLink struct {
 	URL   string `json:"url"`
 }
 
-// linkKey is the TUI key that opens a listing: l for Luma, m for Meetup.
-// Anywhere else is reached through enter, when it is the RSVP.
-func linkKey(link EventLink) string {
-	switch link.Label {
-	case "Luma":
-		return "l"
-	case "Meetup":
-		return "m"
-	}
-
-	return ""
-}
-
 // Job is one role from the job board API's /v1/jobs. The facet fields hold
 // slugs (`remote`, `llm-security`); Board.Label names them.
 type Job struct {
