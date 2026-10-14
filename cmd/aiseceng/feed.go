@@ -156,7 +156,7 @@ func getOnce[T any](ctx context.Context, url string) (T, error) {
 	}
 
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "aiseceng-cli/"+version)
+	req.Header.Set("User-Agent", "aiseceng-cli/"+cmp.Or(version, "dev"))
 
 	res, err := client.Do(req)
 	if err != nil {
