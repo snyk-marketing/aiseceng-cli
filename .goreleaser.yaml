@@ -1,0 +1,42 @@
+# Builds the `aiseceng` binaries, attaches them to a GitHub release and
+# updates the Homebrew cask. Run by .github/workflows/release.yaml on a
+# `v*` tag. Check it locally with `goreleaser release --snapshot --clean`.
+version: 2
+
+project_name: aiseceng
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  disable: true
+
+homebrew_casks:
+  - name: aiseceng
+    homepage: https://www.aiseceng.io
+    description: The AI Security Engineers community, from your terminal
+    repository:
+      owner: snyk-marketing
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    # The binary is not notarized, so macOS would quarantine it on first run.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/aiseceng"]
+          end

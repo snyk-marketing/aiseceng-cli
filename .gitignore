@@ -1,0 +1,4 @@
+# GoReleaser output
+dist/
+# go build output
+/aiseceng
