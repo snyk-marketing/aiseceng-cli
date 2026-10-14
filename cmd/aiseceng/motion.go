@@ -7,14 +7,18 @@ import (
 )
 
 // The TUI's spring motion, on harmonica's damped springs: the coral rule
-// stretches to a new tab. A spring can be retargeted mid-move, so holding a
-// key keeps the motion continuous, and each settles within a second, after
-// which the frame clock stops.
+// stretches to a new tab, and the cursor bar glides between rows as the list
+// scrolls. A spring can be retargeted mid-move, so holding a key keeps the
+// motion continuous, and each settles within a second, after which the frame
+// clock stops.
 
 var (
 	// The rule's leading edge runs ahead of its trailing edge, so it stretches.
 	leadSpring  = newSpring(22, 0.75)
 	trailSpring = newSpring(12, 0.9)
+	// The bar overshoots a little; the scroll never does.
+	cursorSpring = newSpring(24, 0.72)
+	scrollSpring = newSpring(16, 1)
 )
 
 // nearCell is how close a glide in cells gets before it snaps home: closer
@@ -80,3 +84,46 @@ func (r *tabRule) slide(spans [][2]int, from, to tab) {
 }
 
 func (r tabRule) moving() bool { return r.left.moving() || r.right.moving() }
+
+// listGlide is the current tab's cursor bar and scroll offset, in rows.
+type listGlide struct{ cursor, offset glide }
+
+func newListGlide() listGlide {
+	return listGlide{cursor: newGlide(cursorSpring, nearCell), offset: newGlide(scrollSpring, nearCell)}
+}
+
+func (l *listGlide) aim(cursor, offset int) {
+	l.cursor.target, l.offset.target = float64(cursor), float64(offset)
+}
+
+func (l *listGlide) snap(cursor, offset int) {
+	l.cursor.snap(float64(cursor))
+	l.offset.snap(float64(offset))
+}
+
+func (l listGlide) moving() bool { return l.cursor.moving() || l.offset.moving() }
+
+// gutter is the cursor bar's cell beside row i, with room after it: the
+// whole bar on the row it rests on, or half on each of two rows it is
+// passing between.
+func (l listGlide) gutter(i int) string {
+	base := math.Floor(l.cursor.pos)
+	frac := l.cursor.pos - base
+
+	switch row := float64(i); {
+	case frac < 0.25 && row == base, frac > 0.75 && row == base+1:
+		return linkText.Render("▌") + " "
+	case frac >= 0.25 && frac <= 0.75 && row == base:
+		return linkText.Render("▖") + " "
+	case frac >= 0.25 && frac <= 0.75 && row == base+1:
+		return linkText.Render("▘") + " "
+	}
+
+	return "  "
+}
+
+// barRow is the row the bar is nearest, the one drawn as selected.
+func (l listGlide) barRow() int { return int(math.Round(l.cursor.pos)) }
+
+// scrollRow is the first row drawn.
+func (l listGlide) scrollRow() int { return max(0, int(math.Round(l.offset.pos))) }

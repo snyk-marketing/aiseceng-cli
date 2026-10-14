@@ -23,10 +23,11 @@ import (
 //
 // Motion is one-shot by design. The banner decodes once at launch, then the
 // map's land sweeps in, its chapters light up and the first rows cascade in;
-// selecting another city pings it for three frames. A spring (motion.go)
-// slides the tab rule to a new tab and stops once it settles. When nothing
-// is moving nothing ticks, so an idle TUI costs no redraws. The search cursor
-// is steady rather than blinking for the same reason.
+// selecting another city pings it for three frames. Springs (motion.go)
+// carry the tab rule and the cursor bar to wherever a key sends them, and
+// stop once they settle. When nothing is moving nothing ticks, so an idle TUI
+// costs no redraws. The search cursor is steady rather than blinking for the
+// same reason.
 
 type tab int
 
@@ -111,6 +112,7 @@ type model struct {
 	intro    int
 	ping     int
 	rule     tabRule
+	list     listGlide
 	ticking  bool
 	rng      *rand.Rand
 	status   string
@@ -123,6 +125,7 @@ func newModel(ctx context.Context) model {
 		masks:    map[[2]int]*landMask{},
 		inSplash: true,
 		rule:     newTabRule(),
+		list:     newListGlide(),
 		ticking:  true,
 		rng:      rand.New(rand.NewPCG(1, 2)),
 		now:      time.Now(),
@@ -205,7 +208,7 @@ func (m model) animating() bool {
 }
 
 func (m model) moving() bool {
-	return m.rule.moving()
+	return m.rule.moving() || m.list.moving()
 }
 
 // stepMotion moves every spring one frame. The rule's targets follow the tab
@@ -218,6 +221,8 @@ func (m *model) stepMotion() {
 
 	m.rule.left.step()
 	m.rule.right.step()
+	m.list.cursor.step()
+	m.list.offset.step()
 }
 
 // leaveSplash ends the splash once the banner has decoded and every read has
@@ -250,6 +255,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.clampScroll()
+		m.list.snap(m.cursor[m.tab], m.offset[m.tab])
 
 		return m, nil
 
@@ -305,13 +311,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		m.status = ""
-		before, beforeTab := m.highlight(), m.tab
+		before, beforeTab, beforeQuery := m.highlight(), m.tab, m.query()
 
 		next, cmd := m.handleKey(msg)
 		m = next.(model)
 
-		if m.tab != beforeTab {
+		// The cursor glides within a list, but jumps to a new tab or a new set
+		// of results, where gliding through the rows would mean nothing.
+		switch {
+		case m.tab != beforeTab:
 			m.rule.slide(tabSpans(m.tabLabels()), beforeTab, m.tab)
+			m.list.snap(m.cursor[m.tab], m.offset[m.tab])
+		case m.query() != beforeQuery:
+			m.list.snap(m.cursor[m.tab], m.offset[m.tab])
+		default:
+			m.list.aim(m.cursor[m.tab], m.offset[m.tab])
 		}
 
 		// Moving onto another city pings it, once the map has drawn in.
@@ -475,6 +489,15 @@ func (m model) retry() (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+// query is the current tab's search, or "" on a tab without one.
+func (m model) query() string {
+	if m.tab == joinTab {
+		return ""
+	}
+
+	return m.inputs[m.tab].Value()
 }
 
 // input is the current tab's search, or nil on a tab without one.
@@ -862,7 +885,7 @@ func (m model) panes(listWidth, detailWidth, body int) (rows, detail []string) {
 		}
 
 		for i := range events {
-			rows = append(rows, eventRow(events, i, i == m.cursor[eventsTab], listWidth))
+			rows = append(rows, m.list.gutter(i)+eventRow(events, i, i == m.list.barRow(), listWidth))
 		}
 
 		lines, actions := eventDetail(events[m.cursor[eventsTab]], detailWidth)
@@ -878,7 +901,7 @@ func (m model) panes(listWidth, detailWidth, body int) (rows, detail []string) {
 		}
 
 		for i, j := range jobs {
-			rows = append(rows, jobRow(j, i == m.cursor[jobsTab], listWidth, m.now))
+			rows = append(rows, m.list.gutter(i)+jobRow(j, i == m.list.barRow(), listWidth, m.now))
 		}
 
 		detail = jobDetail(m.board, jobs[m.cursor[jobsTab]], detailWidth, body)
@@ -893,7 +916,7 @@ func (m model) panes(listWidth, detailWidth, body int) (rows, detail []string) {
 		}
 
 		for i, c := range chapters {
-			rows = append(rows, chapterRow(c, nextMeetup(m.events, c), i == m.cursor[chaptersTab], listWidth))
+			rows = append(rows, m.list.gutter(i)+chapterRow(c, nextMeetup(m.events, c), i == m.list.barRow(), listWidth))
 		}
 
 		c := chapters[m.cursor[chaptersTab]]
@@ -903,13 +926,13 @@ func (m model) panes(listWidth, detailWidth, body int) (rows, detail []string) {
 		links := joinLinks()
 
 		for i, link := range links {
-			rows = append(rows, joinRow(link, i == m.cursor[joinTab], listWidth))
+			rows = append(rows, m.list.gutter(i)+joinRow(link, i == m.list.barRow(), listWidth))
 		}
 
 		detail = joinDetail(links[m.cursor[joinTab]], detailWidth, body)
 	}
 
-	offset := m.offset[m.tab]
+	offset := m.list.scrollRow()
 
 	return rows[min(offset, len(rows)):min(offset+body, len(rows))], detail
 }
@@ -933,14 +956,8 @@ func emptyNotice(what string) []string {
 	return []string{" " + secondaryText.Render("No "+what+" match."), " " + mutedText.Render("esc clears the search")}
 }
 
-// selectable prefixes a row with the cursor's coral bar, or room for it.
-func selectable(selected bool) string {
-	if selected {
-		return linkText.Render("▌ ")
-	}
-
-	return "  "
-}
+// The rows below are `width` cells less the two the cursor's gutter
+// (listGlide.gutter) takes before each.
 
 func jobRow(j Job, selected bool, width int, now time.Time) string {
 	const dateWidth, employerWidth = 6, 14
@@ -956,8 +973,7 @@ func jobRow(j Job, selected bool, width int, now time.Time) string {
 		date = greenText
 	}
 
-	return selectable(selected) +
-		date.Render(fit(shortDate(j.PostedAt), dateWidth)) + gap +
+	return date.Render(fit(shortDate(j.PostedAt), dateWidth)) + gap +
 		role.Render(fit(j.Role, roleWidth)) + gap +
 		employer.Render(fit(j.Employer, employerWidth))
 }
@@ -982,8 +998,7 @@ func eventRow(events []Event, i int, selected bool, width int) string {
 		day = ""
 	}
 
-	return selectable(selected) +
-		date.Render(fit(day, dateWidth)) + gap +
+	return date.Render(fit(day, dateWidth)) + gap +
 		meta.Render(fit(strings.TrimSuffix(deref(e.Time), " local"), timeWidth)) + gap +
 		meta.Render(fit(cmp.Or(deref(e.City), "Online"), cityWidth)) + gap +
 		title.Render(fit(e.Title, titleWidth))
@@ -995,7 +1010,7 @@ func joinRow(link joinLink, selected bool, width int) string {
 		label = boldText
 	}
 
-	return selectable(selected) + label.Render(fit(link.label, 14)) + mutedText.Render(fit(displayURL(link.url), width-18))
+	return label.Render(fit(link.label, 14)) + mutedText.Render(fit(displayURL(link.url), width-18))
 }
 
 // field is one `LABEL  value` line of a detail pane.
@@ -1124,7 +1139,7 @@ func chapterRow(c Chapter, next *Event, selected bool, width int) string {
 
 	dot := lipgloss.NewStyle().Foreground(cmp.Or(regionColors[deref(c.Region)], white)).Render("●")
 
-	return selectable(selected) + dot + " " + name.Render(fit(c.Name, max(10, width-20))) + gap + when
+	return dot + " " + name.Render(fit(c.Name, max(10, width-20))) + gap + when
 }
 
 func chapterDetail(c Chapter, next *Event, width int) (lines []string, actions string) {
