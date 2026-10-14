@@ -54,12 +54,19 @@ const gap = "  "
 // room ("Carnegie Mellon University (Software Engineering Institute / CERT)").
 const sideColumnWidth = 24
 
-// renderTable aligns rows into columns. Every column but `flex` is as wide as
-// its widest value; `flex` takes what is left of `width` and truncates. A
-// width of 0 (output is not a terminal) truncates nothing.
+// renderTable prints rows aligned into columns; see tableLines.
 func renderTable(w io.Writer, rows [][]cell, flex, width int) {
+	for _, line := range tableLines(rows, flex, width) {
+		lipgloss.Fprintln(w, line)
+	}
+}
+
+// tableLines aligns rows into columns, one line per row. Every column but
+// `flex` is as wide as its widest value; `flex` takes what is left of `width`
+// and truncates. A width of 0 (output is not a terminal) truncates nothing.
+func tableLines(rows [][]cell, flex, width int) []string {
 	if len(rows) == 0 {
-		return
+		return nil
 	}
 
 	widths := make([]int, len(rows[0]))
@@ -82,7 +89,9 @@ func renderTable(w io.Writer, rows [][]cell, flex, width int) {
 		widths[flex] = max(min(widths[flex], width-fixed), 12)
 	}
 
-	for _, row := range rows {
+	lines := make([]string, len(rows))
+
+	for r, row := range rows {
 		parts := make([]string, len(row))
 
 		for i, c := range row {
@@ -97,8 +106,10 @@ func renderTable(w io.Writer, rows [][]cell, flex, width int) {
 			parts[i] = style.Render(text)
 		}
 
-		lipgloss.Fprintln(w, strings.Join(parts, gap))
+		lines[r] = strings.Join(parts, gap)
 	}
+
+	return lines
 }
 
 // pad fills text with spaces out to width cells.
@@ -219,7 +230,15 @@ func renderJobs(w io.Writer, jobs []Job, total, width int, now time.Time) {
 		}
 	}
 
-	renderTable(w, rows, 1, width)
+	// Each role's apply link prints whole on the line under it, past the date
+	// column: a truncated link is a broken one, and a hyperlink on the role
+	// alone is lost on a terminal without them and in a pipe.
+	indent := strings.Repeat(" ", ansi.StringWidth(shortDate(today))+len(gap))
+
+	for i, line := range tableLines(rows, 1, width) {
+		lipgloss.Fprintln(w, line)
+		lipgloss.Fprintln(w, indent+linkText.Hyperlink(jobs[i].ApplyURL).Render(jobs[i].ApplyURL))
+	}
 
 	if len(jobs) < total {
 		lipgloss.Fprintln(w)

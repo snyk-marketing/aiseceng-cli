@@ -5,6 +5,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -61,6 +62,31 @@ func TestRenderTableFitsTheTerminal(t *testing.T) {
 	if !strings.Contains(line, "…  Sezzle") {
 		t.Fatalf("want the flex column truncated before the next one, got %q", line)
 	}
+}
+
+func TestRenderJobsPrintsEachApplyLinkUnderItsRole(t *testing.T) {
+	var out bytes.Buffer
+
+	jobs := []Job{
+		{Role: "AI Red Team Engineer", Employer: "Mercor", PostedAt: "2026-10-13", ApplyURL: "https://jobs.example.com/red-team"},
+		{Role: "Security Engineer", Employer: "Monzo", PostedAt: "2026-10-12", ApplyURL: "https://jobs.example.com/security"},
+	}
+
+	renderJobs(&out, jobs, 2, 40, time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC))
+
+	lines := strings.Split(ansi.Strip(out.String()), "\n")
+
+	for i, line := range lines {
+		if strings.Contains(line, "AI Red Team") {
+			if next := strings.TrimSpace(lines[i+1]); next != "https://jobs.example.com/red-team" {
+				t.Fatalf("want the whole link under the role even at 40 columns, got %q", next)
+			}
+
+			return
+		}
+	}
+
+	t.Fatalf("no role row in:\n%s", out.String())
 }
 
 // Every animation must end: the launch (banner, map, cascade) and the ping
