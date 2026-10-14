@@ -1,21 +1,23 @@
 package main
 
 import (
+	"strings"
+
 	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/key"
 )
 
 // The TUI's keys, named once: Update matches against these bindings, and the
-// key bar and the detail pane's action lines print from them, so they always
-// agree. A binding's help key is how the TUI writes the key; its help text is
-// its shortest description, for the key bar.
+// key bar and the `?` reference print from them, so the three always agree.
+// A binding's help key is its label in the reference; its help text is its
+// shortest description, for the key bar.
 
 type keyMap struct {
 	Up, Down, Top, Bottom, PageUp, PageDown key.Binding
 	NextTab, PrevTab, JumpTab               key.Binding
 	Search, Clear                           key.Binding
 	Open, Luma, Meetup, Copy                key.Binding
-	Retry, Quit, ForceQuit                  key.Binding
+	Retry, Help, Quit, ForceQuit            key.Binding
 }
 
 var keys = keyMap{
@@ -35,6 +37,7 @@ var keys = keyMap{
 	Meetup:    key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "Meetup")),
 	Copy:      key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "copy link")),
 	Retry:     key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "retry")),
+	Help:      key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "keys")),
 	Quit:      key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
 	ForceQuit: key.NewBinding(key.WithKeys("ctrl+c")),
 }
@@ -85,4 +88,70 @@ func relabel(b key.Binding, label, desc string) key.Binding {
 	b.SetHelp(label, desc)
 
 	return b
+}
+
+// referenceRow is one line of the `?` reference: the keys of its bindings,
+// side by side, and what they do.
+type referenceRow struct {
+	bindings []key.Binding
+	desc     string
+}
+
+// keyReference is the `?` reference in groups, headed in the detail pane's
+// label style.
+var keyReference = []struct {
+	head string
+	rows []referenceRow
+}{
+	{"Move", []referenceRow{
+		{[]key.Binding{keys.Up, keys.Down}, "move"},
+		{[]key.Binding{keys.Top, keys.Bottom}, "top, bottom"},
+		{[]key.Binding{keys.PageUp, keys.PageDown}, "page"},
+	}},
+	{"Search", []referenceRow{
+		{[]key.Binding{keys.Search}, "search as you type"},
+		{[]key.Binding{keys.Clear}, "clear the search"},
+	}},
+	{"Open", []referenceRow{
+		{[]key.Binding{keys.Open}, "rsvp, apply, chapter page"},
+		{[]key.Binding{keys.Luma, keys.Meetup}, "on Luma, on Meetup"},
+		{[]key.Binding{keys.Copy}, "copy the link"},
+	}},
+	{"Tabs", []referenceRow{
+		{[]key.Binding{keys.NextTab, keys.PrevTab}, "next, previous"},
+		{[]key.Binding{keys.JumpTab}, "jump"},
+	}},
+	{"", []referenceRow{
+		{[]key.Binding{keys.Retry}, "retry a failed load"},
+		{[]key.Binding{keys.Help}, "close this"},
+		{[]key.Binding{keys.Quit}, "quit"},
+	}},
+}
+
+// referenceLines is the `?` reference, one line per row.
+func referenceLines() []string {
+	const keyWidth = 16
+
+	var lines []string
+
+	for i, group := range keyReference {
+		if i > 0 {
+			lines = append(lines, "")
+		}
+
+		if group.head != "" {
+			lines = append(lines, labelText.Render(strings.ToUpper(group.head)))
+		}
+
+		for _, row := range group.rows {
+			labels := make([]string, len(row.bindings))
+			for j, b := range row.bindings {
+				labels[j] = b.Help().Key
+			}
+
+			lines = append(lines, whiteText.Render(pad(strings.Join(labels, "  "), keyWidth))+secondaryText.Render(row.desc))
+		}
+	}
+
+	return lines
 }

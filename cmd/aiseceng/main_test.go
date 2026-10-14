@@ -167,3 +167,29 @@ func TestTUIAnimationsSettle(t *testing.T) {
 
 	settle(cmd, pingFrames+1)
 }
+
+// ? swaps the detail for the key reference, and esc puts the detail back.
+func TestTUIKeyReference(t *testing.T) {
+	var m tea.Model = newModel(context.Background())
+
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m, _ = m.Update(eventsMsg{})
+	m, _ = m.Update(boardMsg{board: testBoard})
+	m, _ = m.Update(chaptersMsg{})
+
+	for range splashFrames + introFrames {
+		m, _ = m.Update(frameMsg{})
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: '?', Text: "?"})
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "search as you type") || strings.Contains(view, "apply on") {
+		t.Fatalf("want ? to swap the role's detail for the key reference, got:\n%s", view)
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if view := ansi.Strip(m.View().Content); strings.Contains(view, "search as you type") || !strings.Contains(view, "apply on") {
+		t.Fatalf("want esc to bring the role's detail back, got:\n%s", view)
+	}
+}

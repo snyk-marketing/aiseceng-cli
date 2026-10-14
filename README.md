@@ -31,6 +31,7 @@ Run `aiseceng` on its own for the TUI: Events, Jobs, Chapters and Join tabs, eac
 | `l` / `m` | Open an event on Luma or Meetup, or a chapter's Meetup group |
 | `c` | Copy the link |
 | `esc` | Clear the search |
+| `?` | Show every key |
 | `q` | Quit |
 
 Or print and exit, for scripts and for anyone who would rather not use a TUI:

@@ -21,7 +21,8 @@ import (
 // the ways to join, each a list with the selected item's detail beside it,
 // and a `/` search that works like the plain commands' search words. On the
 // events and chapters tabs the detail sits under the chapter map
-// (worldmap.go), with the selected city lit.
+// (worldmap.go), with the selected city lit. `?` swaps the detail for a
+// reference of every key (keys.go).
 //
 // Motion is one-shot by design. The banner decodes once at launch, then the
 // map's land sweeps in, its chapters light up and the first rows cascade in;
@@ -110,7 +111,8 @@ type model struct {
 	// masks keeps the map's land per size, shared by every copy of the model.
 	masks map[[2]int]*landMask
 
-	bar help.Model
+	showKeys bool
+	bar      help.Model
 
 	inSplash bool
 	frame    int
@@ -362,6 +364,8 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, keys.Quit):
 		return m, tea.Quit
+	case key.Matches(msg, keys.Help):
+		m.showKeys = !m.showKeys
 	case key.Matches(msg, keys.NextTab):
 		m.switchTab(1)
 	case key.Matches(msg, keys.PrevTab):
@@ -373,7 +377,10 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, input.Focus()
 		}
 	case key.Matches(msg, keys.Clear):
-		if input := m.input(); input != nil {
+		// esc closes the key reference first, then clears the search.
+		if m.showKeys {
+			m.showKeys = false
+		} else if input := m.input(); input != nil {
 			input.SetValue("")
 			m.resetCursor()
 		}
@@ -628,6 +635,16 @@ func (m model) mainView() string {
 		rows = rows[:min(len(rows), (m.intro+1)*body/cascadeFrames)]
 	}
 
+	// The key reference takes the detail's place, or the list's in a
+	// terminal too narrow for a detail pane.
+	if m.showKeys {
+		if detailWidth > 0 {
+			detail = referenceLines()
+		} else {
+			rows = referenceLines()
+		}
+	}
+
 	list := block(rows, listWidth, body)
 
 	if detailWidth > 0 {
@@ -745,11 +762,16 @@ func (m model) keyBar() string {
 		relabel(keys.Open, "enter", openVerbs[m.tab]),
 		keys.Copy,
 		relabel(keys.NextTab, "tab", strings.ToLower(next)),
+		keys.Help,
 		keys.Quit,
 	}
 
 	if m.tab == joinTab {
 		bindings = slices.Delete(bindings, 1, 2)
+	}
+
+	if m.showKeys {
+		bindings = []key.Binding{move, relabel(keys.Help, "?", "close"), keys.Quit}
 	}
 
 	bar := m.bar
