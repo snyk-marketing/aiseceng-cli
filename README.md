@@ -64,7 +64,7 @@ go test ./...
 
 ## Release
 
-Push a tag such as `v0.1.0`. The release workflow runs [GoReleaser](https://goreleaser.com), which publishes the binaries here and updates the cask in [snyk-marketing/homebrew-tap](https://github.com/snyk-marketing/homebrew-tap). It needs a `HOMEBREW_TAP_TOKEN` secret that can push to that repo.
+Push a tag such as `v0.1.0`. The release workflow runs [GoReleaser](https://goreleaser.com), which publishes the binaries here and updates the cask in [snyk-marketing/homebrew-tap](https://github.com/snyk-marketing/homebrew-tap). It pushes the cask with the `HOMEBREW_TAP_DEPLOY_KEY` secret, the private half of a read-write deploy key on that repo.
 
 ## License
 
