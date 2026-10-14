@@ -7,10 +7,10 @@ import (
 )
 
 // The TUI's spring motion, on harmonica's damped springs: the coral rule
-// stretches to a new tab, and the cursor bar glides between rows as the list
-// scrolls. A spring can be retargeted mid-move, so holding a key keeps the
-// motion continuous, and each settles within a second, after which the frame
-// clock stops.
+// stretches to a new tab, the cursor bar glides between rows as the list
+// scrolls, and the map's marker flies to the selected city. A spring can be
+// retargeted mid-move, so holding a key keeps the motion continuous, and each
+// settles within a second, after which the frame clock stops.
 
 var (
 	// The rule's leading edge runs ahead of its trailing edge, so it stretches.
@@ -19,11 +19,23 @@ var (
 	// The bar overshoots a little; the scroll never does.
 	cursorSpring = newSpring(24, 0.72)
 	scrollSpring = newSpring(16, 1)
+	flightSpring = newSpring(8, 0.72)
+	ringSpring   = newSpring(14, 0.55)
 )
 
-// nearCell is how close a glide in cells gets before it snaps home: closer
-// than the screen can show.
-const nearCell = 0.1
+const (
+	// trailFrames is how long a dot of the marker's trail takes to fade.
+	trailFrames = 12
+	// ringFrames is how long the ring sent out on landing takes to fade.
+	ringFrames = 14
+	// landingDegrees is how close the marker gets before it counts as landed.
+	landingDegrees = 3
+	// nearCell and nearDegree are how close a glide in cells, or in degrees,
+	// gets before it snaps home: closer than the screen can show, since a map
+	// cell is six degrees or more.
+	nearCell   = 0.1
+	nearDegree = 1
+)
 
 // newSpring is a harmonica spring stepped once per frame.
 func newSpring(angularFrequency, dampingRatio float64) harmonica.Spring {
@@ -127,3 +139,77 @@ func (l listGlide) barRow() int { return int(math.Round(l.cursor.pos)) }
 
 // scrollRow is the first row drawn.
 func (l listGlide) scrollRow() int { return max(0, int(math.Round(l.offset.pos))) }
+
+// flight is the map marker, in degrees so it is the same at any map size: it
+// eases from city to city, leaves a fading trail, and sends out a ring when
+// it lands. Its first city it is placed on, without flying.
+type flight struct {
+	lat, lon glide
+	trail    []trailDot
+	ring     glide
+	ringLeft int
+	landed   bool
+	// slug is the chapter it is on or flying to; "" before the first.
+	slug string
+}
+
+type trailDot struct {
+	lat, lon float64
+	age      int
+}
+
+func newFlight() flight {
+	return flight{lat: newGlide(flightSpring, nearDegree), lon: newGlide(flightSpring, nearDegree), ring: newGlide(ringSpring, nearCell)}
+}
+
+// aim flies the marker to c from wherever it is, or places it there first.
+func (f *flight) aim(c *Chapter) {
+	if f.slug == "" {
+		f.lat.snap(c.Lat)
+		f.lon.snap(c.Lon)
+		f.land()
+	} else {
+		f.lat.target, f.lon.target = c.Lat, c.Lon
+		f.landed = false
+	}
+
+	f.slug = c.Slug
+}
+
+func (f *flight) land() {
+	f.landed = true
+	f.ring.snap(0)
+	f.ring.target = 3
+	f.ringLeft = ringFrames
+}
+
+func (f *flight) step() {
+	f.lat.step()
+	f.lon.step()
+
+	kept := f.trail[:0]
+	for _, dot := range f.trail {
+		if dot.age++; dot.age < trailFrames {
+			kept = append(kept, dot)
+		}
+	}
+
+	f.trail = kept
+
+	if !f.landed {
+		f.trail = append(f.trail, trailDot{lat: f.lat.pos, lon: f.lon.pos})
+
+		if math.Hypot(f.lat.pos-f.lat.target, f.lon.pos-f.lon.target) < landingDegrees {
+			f.land()
+		}
+	}
+
+	if f.ringLeft > 0 {
+		f.ring.step()
+		f.ringLeft--
+	}
+}
+
+func (f flight) moving() bool {
+	return f.lat.moving() || f.lon.moving() || f.ringLeft > 0 || len(f.trail) > 0
+}

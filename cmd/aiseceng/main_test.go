@@ -119,8 +119,9 @@ func TestRenderChaptersPrintsEachPageUnderItsChapter(t *testing.T) {
 }
 
 // Every animation must end: the launch (banner, map, cascade), the cursor's
-// glide and the ping when it lands on another city, and the tab rule's slide. Once each
-// has played the TUI stops asking for frames, so an idle TUI redraws nothing.
+// glide, the marker's flight to another city and the tab rule's slide. Once
+// each has played the TUI stops asking for frames, so an idle TUI redraws
+// nothing.
 func TestTUIAnimationsSettle(t *testing.T) {
 	lisbon, sf := "aiseceng-lisbon", "aiseceng-san-francisco"
 
@@ -153,7 +154,7 @@ func TestTUIAnimationsSettle(t *testing.T) {
 		}
 	}
 
-	settle(nextFrame(), splashFrames+introFrames+pingFrames+1)
+	settle(nextFrame(), splashFrames+introFrames+ringFrames+1)
 
 	view := ansi.Strip(m.View().Content)
 	if !strings.Contains(view, "Jobs 3") || !strings.Contains(view, "Lisbon") {
@@ -164,8 +165,8 @@ func TestTUIAnimationsSettle(t *testing.T) {
 	const springBudget = 34
 
 	m, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	if got := m.(model); got.ping != pingFrames || !got.list.moving() {
-		t.Fatal("want moving onto San Francisco to glide the cursor there and ping it")
+	if got := m.(model); got.flight.landed || got.flight.slug != sf || !got.list.moving() {
+		t.Fatal("want moving onto San Francisco to glide the cursor there and fly the marker")
 	}
 
 	settle(cmd, springBudget)

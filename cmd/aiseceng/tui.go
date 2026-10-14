@@ -22,12 +22,11 @@ import (
 // (worldmap.go), with the selected city lit.
 //
 // Motion is one-shot by design. The banner decodes once at launch, then the
-// map's land sweeps in, its chapters light up and the first rows cascade in;
-// selecting another city pings it for three frames. Springs (motion.go)
-// carry the tab rule and the cursor bar to wherever a key sends them, and
-// stop once they settle. When nothing is moving nothing ticks, so an idle TUI
-// costs no redraws. The search cursor is steady rather than blinking for the
-// same reason.
+// map's land sweeps in, its chapters light up and the first rows cascade in.
+// After that, springs (motion.go) carry the tab rule, the cursor bar and the
+// map's marker to wherever a key sends them, and stop once they settle. When
+// nothing is moving nothing ticks, so an idle TUI costs no redraws. The
+// search cursor is steady rather than blinking for the same reason.
 
 type tab int
 
@@ -77,8 +76,6 @@ const (
 	introFrames   = 22
 	sweepFrames   = 12
 	cascadeFrames = 10
-	// pingFrames is the ring around a newly selected city, about 100ms.
-	pingFrames = 3
 	// splitWidth is the narrowest terminal that gets a detail pane.
 	splitWidth = 100
 )
@@ -110,9 +107,9 @@ type model struct {
 	inSplash bool
 	frame    int
 	intro    int
-	ping     int
 	rule     tabRule
 	list     listGlide
+	flight   flight
 	ticking  bool
 	rng      *rand.Rand
 	status   string
@@ -126,6 +123,7 @@ func newModel(ctx context.Context) model {
 		inSplash: true,
 		rule:     newTabRule(),
 		list:     newListGlide(),
+		flight:   newFlight(),
 		ticking:  true,
 		rng:      rand.New(rand.NewPCG(1, 2)),
 		now:      time.Now(),
@@ -204,11 +202,11 @@ func open(url string) tea.Cmd {
 // ---------- update ----------
 
 func (m model) animating() bool {
-	return (m.inSplash && m.frame < splashFrames) || (!m.inSplash && (m.intro < introFrames || m.ping > 0 || m.moving()))
+	return (m.inSplash && m.frame < splashFrames) || (!m.inSplash && (m.intro < introFrames || m.moving()))
 }
 
 func (m model) moving() bool {
-	return m.rule.moving() || m.list.moving()
+	return m.rule.moving() || m.list.moving() || m.flight.moving()
 }
 
 // stepMotion moves every spring one frame. The rule's targets follow the tab
@@ -223,6 +221,7 @@ func (m *model) stepMotion() {
 	m.rule.right.step()
 	m.list.cursor.step()
 	m.list.offset.step()
+	m.flight.step()
 }
 
 // leaveSplash ends the splash once the banner has decoded and every read has
@@ -247,6 +246,19 @@ func (m *model) resumeFrames() tea.Cmd {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m, cmd := m.update(msg)
+
+	// The marker flies to whichever city the selection lights, however it
+	// changed, once the map has drawn in.
+	if c := m.highlight(); c != nil && m.intro >= introFrames && c.Slug != m.flight.slug {
+		m.flight.aim(c)
+		cmd = tea.Batch(cmd, m.resumeFrames())
+	}
+
+	return m, cmd
+}
+
+func (m model) update(msg tea.Msg) (model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -285,14 +297,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case m.intro < introFrames:
 			m.intro++
 
-			// The intro ends by pinging the city the cursor starts on.
-			if m.intro == introFrames && m.highlight() != nil {
-				m.ping = pingFrames
-			}
-
-			m.stepMotion()
+			fallthrough
 		default:
-			m.ping = max(0, m.ping-1)
 			m.stepMotion()
 		}
 
@@ -311,7 +317,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		m.status = ""
-		before, beforeTab, beforeQuery := m.highlight(), m.tab, m.query()
+		beforeTab, beforeQuery := m.tab, m.query()
 
 		next, cmd := m.handleKey(msg)
 		m = next.(model)
@@ -326,11 +332,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.list.snap(m.cursor[m.tab], m.offset[m.tab])
 		default:
 			m.list.aim(m.cursor[m.tab], m.offset[m.tab])
-		}
-
-		// Moving onto another city pings it, once the map has drawn in.
-		if after := m.highlight(); after != nil && m.intro >= introFrames && (before == nil || before.Slug != after.Slug) {
-			m.ping = pingFrames
 		}
 
 		return m, tea.Batch(cmd, m.resumeFrames())
@@ -1080,7 +1081,7 @@ func (m model) mapDetail(lines []string, actions string, width, body int) []stri
 		m.masks[size] = newLandMask(width, rows)
 	}
 
-	frame := mapFrame{reveal: 1, lit: len(m.chapters), highlight: m.highlight()}
+	frame := mapFrame{reveal: 1, lit: len(m.chapters), highlight: m.highlight(), flight: &m.flight}
 
 	switch {
 	case m.intro < sweepFrames:
@@ -1088,8 +1089,6 @@ func (m model) mapDetail(lines []string, actions string, width, body int) []stri
 		frame = mapFrame{reveal: 1 - (1-t)*(1-t)*(1-t)}
 	case m.intro < introFrames:
 		frame = mapFrame{reveal: 1, lit: len(m.chapters) * (m.intro - sweepFrames) / (introFrames - sweepFrames)}
-	case m.ping > 0:
-		frame.ring = pingFrames - m.ping + 1
 	}
 
 	content := append(m.masks[size].render(m.chapters, frame), "")

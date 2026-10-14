@@ -3,6 +3,7 @@ package main
 import (
 	"cmp"
 	"image/color"
+	"math"
 	"slices"
 	"strings"
 
@@ -112,11 +113,17 @@ type mapFrame struct {
 	reveal float64
 	// lit is how many chapters are lit, west to east.
 	lit int
-	// highlight is the chapter marked in coral, with its name beside it.
+	// highlight is the chapter whose name rides beside the marker.
 	highlight *Chapter
-	// ring is the radius of the ping around the highlight; 0 draws none.
-	ring int
+	// flight is the marker, its trail and its landing ring; nil draws none.
+	flight *flight
 }
+
+// fades are the trail's and the ring's colours as they age, coral to land.
+var (
+	trailFade = lipgloss.Blend1D(trailFrames, coral, land)
+	ringFade  = lipgloss.Blend1D(ringFrames, coral, land)
+)
 
 func (m *landMask) render(chapters []Chapter, frame mapFrame) []string {
 	grid := make([][]string, m.height)
@@ -142,13 +149,20 @@ func (m *landMask) render(chapters []Chapter, frame mapFrame) []string {
 		grid[y][x] = lipgloss.NewStyle().Foreground(cmp.Or(regionColors[deref(c.Region)], white)).Render("●")
 	}
 
-	if c := frame.highlight; c != nil {
-		x, y := m.mapCell(c.Lat, c.Lon)
+	if c, f := frame.highlight, frame.flight; c != nil && f != nil && f.slug != "" {
+		for _, dot := range f.trail {
+			x, y := m.mapCell(dot.lat, dot.lon)
+			grid[y][x] = lipgloss.NewStyle().Foreground(trailFade[dot.age]).Render("·")
+		}
 
-		if r := frame.ring; r > 0 {
+		x, y := m.mapCell(f.lat.pos, f.lon.pos)
+
+		if r := int(math.Round(f.ring.pos)); f.ringLeft > 0 && r > 0 {
+			dot := lipgloss.NewStyle().Foreground(ringFade[ringFrames-f.ringLeft]).Render("·")
+
 			for _, d := range [][2]int{{-2 * r, 0}, {2 * r, 0}, {0, -r}, {0, r}, {-r, -1}, {r, -1}, {-r, 1}, {r, 1}} {
 				if px, py := x+d[0], y+d[1]; px >= 0 && px < m.width && py >= 0 && py < m.height {
-					grid[py][px] = linkText.Render("·")
+					grid[py][px] = dot
 				}
 			}
 		}
