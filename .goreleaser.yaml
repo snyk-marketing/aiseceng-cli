@@ -31,10 +31,14 @@ homebrew_casks:
   - name: aiseceng
     homepage: https://www.aiseceng.io
     description: The AI Security Engineers community, from your terminal
+    # Pushed over SSH with a deploy key that can write to the tap and nothing
+    # else, so no one's personal token is involved.
     repository:
       owner: snyk-marketing
       name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+      git:
+        url: git@github.com:snyk-marketing/homebrew-tap.git
+        private_key: "{{ .Env.HOMEBREW_TAP_DEPLOY_KEY }}"
     # The binary is not notarized, so macOS would quarantine it on first run.
     hooks:
       post:
