@@ -112,6 +112,32 @@ func tableLines(rows [][]cell, flex, width int) []string {
 	return lines
 }
 
+// printWithLinks prints table lines, each followed by its row's links, one
+// per line, whole and indented by indent cells. A truncated link is a broken
+// one, and a hyperlink on the row's text alone is lost on a terminal without
+// them and in a pipe.
+func printWithLinks(w io.Writer, lines []string, links [][]string, indent int) {
+	prefix := strings.Repeat(" ", indent)
+
+	for i, line := range lines {
+		lipgloss.Fprintln(w, line)
+
+		for _, url := range links[i] {
+			lipgloss.Fprintln(w, prefix+linkText.Hyperlink(url).Render(url))
+		}
+	}
+}
+
+// columnWidth is the widest value in one column of rows.
+func columnWidth(rows [][]cell, column int) int {
+	width := 0
+	for _, row := range rows {
+		width = max(width, ansi.StringWidth(row[column].text))
+	}
+
+	return width
+}
+
 // pad fills text with spaces out to width cells.
 func pad(text string, width int) string {
 	return text + strings.Repeat(" ", max(0, width-ansi.StringWidth(text)))
@@ -132,6 +158,7 @@ func renderEvents(w io.Writer, events []Event, width int) {
 	}
 
 	rows := make([][]cell, len(events))
+	links := make([][]string, len(events))
 
 	for i, e := range events {
 		date := cell{text: e.Date, color: secondary}
@@ -139,20 +166,20 @@ func renderEvents(w io.Writer, events []Event, width int) {
 			date.color = green
 		}
 
-		if sameDayAsPrevious(events, i) {
-			date.text = ""
-		}
-
 		rows[i] = []cell{
 			date,
 			{text: deref(e.Time), color: muted},
 			{text: cmp.Or(deref(e.City), deref(e.Venue), "Online"), color: secondary},
-			{text: listingLinks(e.Links), color: muted},
 			{text: e.Title, color: white, link: e.URL, bold: true},
+		}
+
+		for _, link := range e.Links {
+			links[i] = append(links[i], link.URL)
 		}
 	}
 
-	renderTable(w, rows, 4, width)
+	// Every listing's link, Luma's and Meetup's, past the date column.
+	printWithLinks(w, tableLines(rows, 3, width), links, columnWidth(rows, 0)+len(gap))
 	lipgloss.Fprintln(w)
 	lipgloss.Fprintln(w, linkText.Hyperlink(siteURL+"/events/").Render("→ "+displayURL(siteURL+"/events/")))
 }
@@ -166,6 +193,7 @@ func renderChapters(w io.Writer, chapters []Chapter, events []Event, width int) 
 	}
 
 	rows := make([][]cell, len(chapters))
+	links := make([][]string, len(chapters))
 
 	for i, c := range chapters {
 		next := cell{text: "no date yet", color: muted}
@@ -178,21 +206,14 @@ func renderChapters(w io.Writer, chapters []Chapter, events []Event, width int) 
 			{text: deref(c.RegionName), color: muted},
 			next,
 		}
+		links[i] = []string{c.PageURL()}
 	}
 
-	renderTable(w, rows, 2, width)
+	// The chapter's page, which lists its meetups and its Meetup group, past
+	// the name column.
+	printWithLinks(w, tableLines(rows, 2, width), links, columnWidth(rows, 0)+len(gap))
 	lipgloss.Fprintln(w)
 	lipgloss.Fprintln(w, linkText.Hyperlink(siteURL+"/chapters/").Render("→ "+displayURL(siteURL+"/chapters/")))
-}
-
-// listingLinks is an event's listings as clickable labels: "Luma Meetup".
-func listingLinks(links []EventLink) string {
-	labels := make([]string, len(links))
-	for i, link := range links {
-		labels[i] = mutedText.Hyperlink(link.URL).Render(link.Label)
-	}
-
-	return strings.Join(labels, " ")
 }
 
 // shortDate is a role's `YYYY-MM-DD` as `14 Oct`.
@@ -230,15 +251,13 @@ func renderJobs(w io.Writer, jobs []Job, total, width int, now time.Time) {
 		}
 	}
 
-	// Each role's apply link prints whole on the line under it, past the date
-	// column: a truncated link is a broken one, and a hyperlink on the role
-	// alone is lost on a terminal without them and in a pipe.
-	indent := strings.Repeat(" ", ansi.StringWidth(shortDate(today))+len(gap))
-
-	for i, line := range tableLines(rows, 1, width) {
-		lipgloss.Fprintln(w, line)
-		lipgloss.Fprintln(w, indent+linkText.Hyperlink(jobs[i].ApplyURL).Render(jobs[i].ApplyURL))
+	links := make([][]string, len(jobs))
+	for i, j := range jobs {
+		links[i] = []string{j.ApplyURL}
 	}
+
+	// Each role's apply link, past the date column.
+	printWithLinks(w, tableLines(rows, 1, width), links, columnWidth(rows, 0)+len(gap))
 
 	if len(jobs) < total {
 		lipgloss.Fprintln(w)

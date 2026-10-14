@@ -89,6 +89,35 @@ func TestRenderJobsPrintsEachApplyLinkUnderItsRole(t *testing.T) {
 	t.Fatalf("no role row in:\n%s", out.String())
 }
 
+func TestRenderEventsPrintsEveryListingUnderItsEvent(t *testing.T) {
+	var out bytes.Buffer
+
+	renderEvents(&out, []Event{{
+		Title: "AI Universal Celebration Hackathon",
+		Date:  "Mon 19 Oct",
+		Links: []EventLink{
+			{Label: "Luma", URL: "https://luma.com/lfjtdq6b"},
+			{Label: "Meetup", URL: "https://www.meetup.com/aiseceng-sf/events/1/"},
+		},
+	}}, 40)
+
+	view := ansi.Strip(out.String())
+
+	if !strings.Contains(view, "\n            https://luma.com/lfjtdq6b\n            https://www.meetup.com/aiseceng-sf/events/1/\n") {
+		t.Fatalf("want both listings whole under the event, past the date column, got:\n%s", view)
+	}
+}
+
+func TestRenderChaptersPrintsEachPageUnderItsChapter(t *testing.T) {
+	var out bytes.Buffer
+
+	renderChapters(&out, []Chapter{{Slug: "aiseceng-lisbon", Name: "Lisbon, PT"}}, nil, 40)
+
+	if view := ansi.Strip(out.String()); !strings.Contains(view, "Lisbon, PT") || !strings.Contains(view, "\n            "+siteURL+"/chapters/aiseceng-lisbon/\n") {
+		t.Fatalf("want the chapter page whole under the chapter, past the name column, got:\n%s", view)
+	}
+}
+
 // Every animation must end: the launch (banner, map, cascade) and the ping
 // when the cursor lands on another city. Once each has played the TUI stops
 // asking for frames, so an idle TUI redraws nothing.
