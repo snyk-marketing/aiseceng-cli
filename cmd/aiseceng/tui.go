@@ -682,18 +682,13 @@ func (m model) searchLine() string {
 		return ""
 	}
 
-	var count string
-
-	switch m.tab {
-	case eventsTab:
-		count = fmt.Sprintf("%d of %d ", len(m.visibleEvents()), len(m.events))
-	case jobsTab:
-		count = fmt.Sprintf("%d of %d ", len(m.visibleJobs()), len(m.board.Jobs))
-	case chaptersTab:
-		count = fmt.Sprintf("%d of %d ", len(m.visibleChapters()), len(m.chapters))
+	// The selection's position among the rows the search leaves visible.
+	total, position := m.count(), 0
+	if total > 0 {
+		position = m.cursor[m.tab] + 1
 	}
 
-	count = mutedText.Render(count)
+	count := mutedText.Render(fmt.Sprintf("%d of %d ", position, total))
 	left := " " + linkText.Render("/") + " " + input.View()
 
 	return fit(left, m.width-ansi.StringWidth(count)) + count
