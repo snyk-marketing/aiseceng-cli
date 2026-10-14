@@ -2,7 +2,7 @@
 
 The [AI Security Engineers](https://www.aiseceng.io) community, from your terminal: upcoming meetups across every chapter, open roles from the job board, and every chapter on a map.
 
-Built with Charm's [Bubble Tea](https://github.com/charmbracelet/bubbletea), [Lip Gloss](https://github.com/charmbracelet/lipgloss) and [Fang](https://github.com/charmbracelet/fang).
+Built with Charm's [Bubble Tea](https://github.com/charmbracelet/bubbletea), [Bubbles](https://github.com/charmbracelet/bubbles), [Lip Gloss](https://github.com/charmbracelet/lipgloss) and [Fang](https://github.com/charmbracelet/fang).
 
 ## Install
 
@@ -25,12 +25,14 @@ Run `aiseceng` on its own for the TUI: Events, Jobs, Chapters and Join tabs, eac
 | Key | Does |
 | :-- | :-- |
 | `↑` `↓` or `j` `k` | Move |
+| `⇧↑` `⇧↓` or the wheel | Scroll a long detail |
 | `tab`, `←` `→`, `1`-`4` | Switch tabs |
 | `/` | Search, as you type |
 | `enter` | Open the RSVP, the apply link or the chapter page |
 | `l` / `m` | Open an event on Luma or Meetup, or a chapter's Meetup group |
 | `c` | Copy the link |
 | `esc` | Clear the search |
+| `?` | Show every key |
 | `q` | Quit |
 
 Or print and exit, for scripts and for anyone who would rather not use a TUI:

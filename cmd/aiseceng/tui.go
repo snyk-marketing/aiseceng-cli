@@ -4,11 +4,16 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"math"
 	"math/rand/v2"
+	"slices"
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/help"
+	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -18,7 +23,8 @@ import (
 // the ways to join, each a list with the selected item's detail beside it,
 // and a `/` search that works like the plain commands' search words. On the
 // events and chapters tabs the detail sits under the chapter map
-// (worldmap.go), with the selected city lit.
+// (worldmap.go), with the selected city lit. A detail longer than its pane
+// scrolls, and `?` swaps the detail for a reference of every key (keys.go).
 //
 // Motion is one-shot by design. The banner decodes once at launch, then the
 // map's land sweeps in, its chapters light up and the first rows cascade in;
@@ -36,6 +42,9 @@ const (
 )
 
 var tabNames = [...]string{"Events", "Jobs", "Chapters", "Join"}
+
+// openVerbs is what enter does on each tab, for the key bar.
+var openVerbs = [...]string{"rsvp", "apply", "chapter page", "open"}
 
 type joinLink struct{ label, about, url string }
 
@@ -104,6 +113,13 @@ type model struct {
 	// masks keeps the map's land per size, shared by every copy of the model.
 	masks map[[2]int]*landMask
 
+	// detail scrolls the selection's detail, kept in step with the selection
+	// by syncDetail; detailFor is the selection it holds.
+	detail    viewport.Model
+	detailFor selection
+	showKeys  bool
+	bar       help.Model
+
 	inSplash bool
 	frame    int
 	intro    int
@@ -118,6 +134,8 @@ func newModel(ctx context.Context) model {
 	m := model{
 		ctx:      ctx,
 		masks:    map[[2]int]*landMask{},
+		detail:   viewport.New(),
+		bar:      newKeyBar(),
 		inSplash: true,
 		ticking:  true,
 		rng:      rand.New(rand.NewPCG(1, 2)),
@@ -222,6 +240,13 @@ func (m *model) resumeFrames() tea.Cmd {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m, cmd := m.update(msg)
+	m.syncDetail()
+
+	return m, cmd
+}
+
+func (m model) update(msg tea.Msg) (model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -280,6 +305,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		return m, nil
 
+	case tea.MouseWheelMsg:
+		if m.inSplash {
+			return m, nil
+		}
+
+		// The wheel scrolls the detail under the pointer, or moves the cursor
+		// over the list.
+		listWidth, _ := m.paneWidths()
+		before := m.highlight()
+
+		switch {
+		case msg.X > listWidth && !m.showKeys:
+			m.detail, _ = m.detail.Update(msg)
+		case msg.Button == tea.MouseWheelUp:
+			m.move(-1)
+		case msg.Button == tea.MouseWheelDown:
+			m.move(1)
+		}
+
+		return m, m.pingMove(before)
+
 	case tea.KeyPressMsg:
 		m.status = ""
 		before := m.highlight()
@@ -287,27 +333,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		next, cmd := m.handleKey(msg)
 		m = next.(model)
 
-		// Moving onto another city pings it, once the map has drawn in.
-		if after := m.highlight(); after != nil && m.intro >= introFrames && (before == nil || before.Slug != after.Slug) {
-			m.ping = pingFrames
-			cmd = tea.Batch(cmd, m.resumeFrames())
-		}
-
-		return m, cmd
+		return m, tea.Batch(cmd, m.pingMove(before))
 	}
 
 	return m, nil
 }
 
-func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	key := msg.String()
+// pingMove pings the city the cursor moved onto from `before`, once the map
+// has drawn in.
+func (m *model) pingMove(before *Chapter) tea.Cmd {
+	if after := m.highlight(); after != nil && m.intro >= introFrames && (before == nil || before.Slug != after.Slug) {
+		m.ping = pingFrames
 
-	if key == "ctrl+c" {
+		return m.resumeFrames()
+	}
+
+	return nil
+}
+
+func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if key.Matches(msg, keys.ForceQuit) {
 		return m, tea.Quit
 	}
 
 	if m.inSplash {
-		if key == "q" || key == "esc" {
+		if key.Matches(msg, keys.Quit, keys.Clear) {
 			return m, tea.Quit
 		}
 
@@ -319,20 +369,23 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if input := m.input(); input != nil && input.Focused() {
-		switch key {
-		case "esc":
+		switch {
+		case key.Matches(msg, typingKeys.Clear):
 			input.SetValue("")
 			input.Blur()
 			m.resetCursor()
-		case "enter":
+		case key.Matches(msg, typingKeys.Done):
 			input.Blur()
-		case "up", "ctrl+p":
+		case key.Matches(msg, typingKeys.Up):
 			m.move(-1)
-		case "down", "ctrl+n":
+		case key.Matches(msg, typingKeys.Down):
 			m.move(1)
-		case "tab", "shift+tab":
+		case key.Matches(msg, typingKeys.NextTab):
 			input.Blur()
-			m.switchTab(key)
+			m.switchTab(1)
+		case key.Matches(msg, typingKeys.PrevTab):
+			input.Blur()
+			m.switchTab(-1)
 		default:
 			before := input.Value()
 
@@ -349,48 +402,59 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	switch key {
-	case "q":
+	switch {
+	case key.Matches(msg, keys.Quit):
 		return m, tea.Quit
-	case "tab", "shift+tab", "right", "left":
-		m.switchTab(key)
-	case "1", "2", "3", "4":
-		m.tab = tab(key[0] - '1')
-	case "/":
+	case key.Matches(msg, keys.Help):
+		m.showKeys = !m.showKeys
+	case key.Matches(msg, keys.NextTab):
+		m.switchTab(1)
+	case key.Matches(msg, keys.PrevTab):
+		m.switchTab(-1)
+	case key.Matches(msg, keys.JumpTab):
+		m.tab = tab(msg.String()[0] - '1')
+	case key.Matches(msg, keys.Search):
 		if input := m.input(); input != nil {
 			return m, input.Focus()
 		}
-	case "esc":
-		if input := m.input(); input != nil {
+	case key.Matches(msg, keys.Clear):
+		// esc closes the key reference first, then clears the search.
+		if m.showKeys {
+			m.showKeys = false
+		} else if input := m.input(); input != nil {
 			input.SetValue("")
 			m.resetCursor()
 		}
-	case "up", "k":
+	case key.Matches(msg, keys.Up):
 		m.move(-1)
-	case "down", "j":
+	case key.Matches(msg, keys.Down):
 		m.move(1)
-	case "pgup":
+	case key.Matches(msg, keys.PageUp):
 		m.move(-m.bodyHeight())
-	case "pgdown", "space":
+	case key.Matches(msg, keys.PageDown):
 		m.move(m.bodyHeight())
-	case "home", "g":
+	case key.Matches(msg, keys.Top):
 		m.move(-m.count())
-	case "end", "G":
+	case key.Matches(msg, keys.Bottom):
 		m.move(m.count())
-	case "enter":
+	case key.Matches(msg, keys.ScrollUp):
+		m.detail.ScrollUp(1)
+	case key.Matches(msg, keys.ScrollDown):
+		m.detail.ScrollDown(1)
+	case key.Matches(msg, keys.Open):
 		if url := m.selectedURL(); url != "" {
 			return m, open(url)
 		}
-	case "c":
+	case key.Matches(msg, keys.Copy):
 		if url := m.selectedURL(); url != "" {
 			m.status = "Copied " + displayURL(url)
 
 			return m, tea.SetClipboard(url)
 		}
-	case "r":
+	case key.Matches(msg, keys.Retry):
 		return m.retry()
-	case "l", "m":
-		if url := m.selectedListing(key); url != "" {
+	case key.Matches(msg, keys.Luma, keys.Meetup):
+		if url := m.selectedListing(msg); url != "" {
 			return m, open(url)
 		}
 	}
@@ -398,23 +462,23 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// selectedListing is the page `key` opens for the selection: an event's Luma
-// or Meetup listing (see linkKey), or a chapter's Meetup group on m. It is ""
+// selectedListing is the page msg opens for the selection: an event's Luma
+// or Meetup listing (see listingKey), or a chapter's Meetup group on m. It is ""
 // when the selection has no such page.
-func (m model) selectedListing(key string) string {
+func (m model) selectedListing(msg tea.KeyPressMsg) string {
 	i := m.cursor[m.tab]
 
 	switch m.tab {
 	case eventsTab:
 		if events := m.visibleEvents(); i < len(events) {
 			for _, link := range events[i].Links {
-				if linkKey(link) == key {
+				if b, ok := listingKey(link); ok && key.Matches(msg, b) {
 					return link.URL
 				}
 			}
 		}
 	case chaptersTab:
-		if chapters := m.visibleChapters(); i < len(chapters) && key == "m" {
+		if chapters := m.visibleChapters(); i < len(chapters) && key.Matches(msg, keys.Meetup) {
 			return deref(chapters[i].Meetup)
 		}
 	}
@@ -422,13 +486,9 @@ func (m model) selectedListing(key string) string {
 	return ""
 }
 
-func (m *model) switchTab(key string) {
-	step := 1
-	if key == "shift+tab" || key == "left" {
-		step = len(tabNames) - 1
-	}
-
-	m.tab = (m.tab + tab(step)) % tab(len(tabNames))
+// switchTab moves step tabs along, wrapping around.
+func (m *model) switchTab(step int) {
+	m.tab = (m.tab + tab(step+len(tabNames))) % tab(len(tabNames))
 }
 
 // retry rereads the current tab's feed after a failed read.
@@ -534,6 +594,18 @@ func (m model) selectedURL() string {
 	return ""
 }
 
+// selection is what the detail pane shows: the tab, the cursor and the
+// selected item's link.
+type selection struct {
+	tab    tab
+	cursor int
+	url    string
+}
+
+func (m model) selection() selection {
+	return selection{m.tab, m.cursor[m.tab], m.selectedURL()}
+}
+
 func (m *model) resetCursor() {
 	m.cursor[m.tab], m.offset[m.tab] = 0, 0
 }
@@ -579,6 +651,7 @@ func (m model) View() tea.View {
 
 	view := tea.NewView(content)
 	view.AltScreen = true
+	view.MouseMode = tea.MouseModeCellMotion
 	view.WindowTitle = "aiseceng"
 
 	return view
@@ -606,24 +679,23 @@ func (m model) mainView() string {
 	lines := m.header()
 
 	body := m.bodyHeight()
-
-	listWidth, detailWidth := m.width, 0
-	if m.width >= splitWidth {
-		listWidth = min(64, m.width*48/100)
-		detailWidth = m.width - listWidth - 3
-	}
-
-	rows, detail := m.panes(listWidth, max(0, detailWidth-1), body)
+	listWidth, detailWidth := m.paneWidths()
+	rows := m.listRows(listWidth, body)
 
 	// The first rows cascade in after the splash.
 	if m.intro < cascadeFrames {
 		rows = rows[:min(len(rows), (m.intro+1)*body/cascadeFrames)]
 	}
 
+	// Without a detail pane, the key reference takes the list's place.
+	if m.showKeys && detailWidth == 0 {
+		rows = referenceLines()
+	}
+
 	list := block(rows, listWidth, body)
 
 	if detailWidth > 0 {
-		right := block(detail, detailWidth-1, body)
+		right := block(m.detailView(detailWidth, body), detailWidth, body)
 
 		for i := range list {
 			list[i] += " " + hairlineText.Render("│") + " " + right[i]
@@ -659,6 +731,18 @@ func (m model) header() []string {
 	}
 
 	return lines
+}
+
+// paneWidths is the list's width and the detail pane's, which is 0 in a
+// terminal too narrow for one.
+func (m model) paneWidths() (list, detail int) {
+	if m.width < splitWidth {
+		return m.width, 0
+	}
+
+	list = min(64, m.width*48/100)
+
+	return list, m.width - list - 4
 }
 
 // tabBar is the wordmark and tabs, with a coral rule under the active tab,
@@ -724,97 +808,209 @@ func (m model) keyBar() string {
 		return " " + whiteText.Render(m.status)
 	}
 
-	var pairs []string
+	move := relabel(keys.Down, "↑↓", "move")
 
-	switch {
-	case m.input() != nil && m.input().Focused():
-		pairs = []string{"↑↓", "move", "enter", "done", "esc", "clear"}
-	case m.tab == eventsTab:
-		pairs = []string{"↑↓", "move", "/", "search", "enter", "rsvp", "c", "copy link", "tab", "jobs", "q", "quit"}
-	case m.tab == jobsTab:
-		pairs = []string{"↑↓", "move", "/", "search", "enter", "apply", "c", "copy link", "tab", "chapters", "q", "quit"}
-	case m.tab == chaptersTab:
-		pairs = []string{"↑↓", "move", "/", "search", "enter", "chapter page", "c", "copy link", "tab", "join", "q", "quit"}
-	default:
-		pairs = []string{"↑↓", "move", "enter", "open", "c", "copy link", "tab", "events", "q", "quit"}
+	if input := m.input(); input != nil && input.Focused() {
+		return " " + m.bar.ShortHelpView([]key.Binding{move, typingKeys.Done, typingKeys.Clear})
 	}
 
-	parts := make([]string, 0, len(pairs)/2)
-	for i := 0; i < len(pairs); i += 2 {
-		parts = append(parts, whiteText.Render(pairs[i])+" "+mutedText.Render(pairs[i+1]))
+	next := tabNames[(int(m.tab)+1)%len(tabNames)]
+	bindings := []key.Binding{
+		move,
+		keys.Search,
+		relabel(keys.Open, "enter", openVerbs[m.tab]),
+		keys.Copy,
+		relabel(keys.NextTab, "tab", strings.ToLower(next)),
+		keys.Help,
+		keys.Quit,
 	}
 
-	return " " + strings.Join(parts, "   ")
+	if m.tab == joinTab {
+		bindings = slices.Delete(bindings, 1, 2)
+	}
+
+	if m.showKeys {
+		bindings = []key.Binding{move, relabel(keys.Help, "?", "close"), keys.Quit}
+	}
+
+	bar := m.bar
+	bar.SetWidth(m.width - 1)
+
+	return " " + bar.ShortHelpView(bindings)
 }
 
-// panes is the current tab's visible list rows and its detail.
-func (m model) panes(listWidth, detailWidth, body int) (rows, detail []string) {
+// listRows is the current tab's visible list rows, or a notice when it has
+// none to show.
+func (m model) listRows(width, body int) []string {
+	var rows []string
+
 	switch m.tab {
 	case eventsTab:
 		if notice := feedNotice(m.eventsDone, m.eventsErr, "events"); notice != nil {
-			return notice, nil
+			return notice
 		}
 
 		if len(m.events) == 0 {
-			return []string{" " + secondaryText.Render("Nothing scheduled right now.")}, nil
+			return []string{" " + secondaryText.Render("Nothing scheduled right now.")}
 		}
 
 		events := m.visibleEvents()
 		if len(events) == 0 {
-			return emptyNotice("events"), nil
+			return emptyNotice("events")
 		}
 
 		for i := range events {
-			rows = append(rows, eventRow(events, i, i == m.cursor[eventsTab], listWidth))
+			rows = append(rows, eventRow(events, i, i == m.cursor[eventsTab], width))
 		}
-
-		lines, actions := eventDetail(events[m.cursor[eventsTab]], detailWidth)
-		detail = m.mapDetail(lines, actions, detailWidth, body)
 	case jobsTab:
 		if notice := feedNotice(m.boardDone, m.boardErr, "roles"); notice != nil {
-			return notice, nil
+			return notice
 		}
 
 		jobs := m.visibleJobs()
 		if len(jobs) == 0 {
-			return emptyNotice("roles"), nil
+			return emptyNotice("roles")
 		}
 
 		for i, j := range jobs {
-			rows = append(rows, jobRow(j, i == m.cursor[jobsTab], listWidth, m.now))
+			rows = append(rows, jobRow(j, i == m.cursor[jobsTab], width, m.now))
 		}
-
-		detail = jobDetail(m.board, jobs[m.cursor[jobsTab]], detailWidth, body)
 	case chaptersTab:
 		if notice := feedNotice(m.chaptersDone, m.chaptersErr, "chapters"); notice != nil {
-			return notice, nil
+			return notice
 		}
 
 		chapters := m.visibleChapters()
 		if len(chapters) == 0 {
-			return emptyNotice("chapters"), nil
+			return emptyNotice("chapters")
 		}
 
 		for i, c := range chapters {
-			rows = append(rows, chapterRow(c, nextMeetup(m.events, c), i == m.cursor[chaptersTab], listWidth))
+			rows = append(rows, chapterRow(c, nextMeetup(m.events, c), i == m.cursor[chaptersTab], width))
 		}
-
-		c := chapters[m.cursor[chaptersTab]]
-		lines, actions := chapterDetail(c, nextMeetup(m.events, c), detailWidth)
-		detail = m.mapDetail(lines, actions, detailWidth, body)
 	default:
-		links := joinLinks()
-
-		for i, link := range links {
-			rows = append(rows, joinRow(link, i == m.cursor[joinTab], listWidth))
+		for i, link := range joinLinks() {
+			rows = append(rows, joinRow(link, i == m.cursor[joinTab], width))
 		}
-
-		detail = joinDetail(links[m.cursor[joinTab]], detailWidth, body)
 	}
 
 	offset := m.offset[m.tab]
 
-	return rows[min(offset, len(rows)):min(offset+body, len(rows))], detail
+	return rows[min(offset, len(rows)):min(offset+body, len(rows))]
+}
+
+// detailPane is the selection's detail in three parts: top stays put (the
+// map), lines scroll in the viewport under it, and actions is pinned to the
+// bottom of the pane.
+type detailPane struct {
+	top     []string
+	lines   []string
+	actions string
+}
+
+// selectionDetail is the detail for the selection, `width` cells wide, with
+// its text two cells narrower to leave room for the scrollbar. It is empty
+// when nothing is selected.
+func (m model) selectionDetail(width, body int) detailPane {
+	if width <= 0 {
+		return detailPane{}
+	}
+
+	text, i := width-2, m.cursor[m.tab]
+
+	switch m.tab {
+	case eventsTab:
+		if events := m.visibleEvents(); m.eventsErr == nil && i < len(events) {
+			lines, actions := eventDetail(events[i], text)
+
+			return m.mapDetail(lines, actions, width, body)
+		}
+	case jobsTab:
+		if jobs := m.visibleJobs(); m.boardErr == nil && i < len(jobs) {
+			lines, actions := jobDetail(m.board, jobs[i], text)
+
+			return detailPane{lines: lines, actions: actions}
+		}
+	case chaptersTab:
+		if chapters := m.visibleChapters(); m.chaptersErr == nil && i < len(chapters) {
+			lines, actions := chapterDetail(chapters[i], nextMeetup(m.events, chapters[i]), text)
+
+			return m.mapDetail(lines, actions, width, body)
+		}
+	default:
+		lines, actions := joinDetail(joinLinks()[i], text)
+
+		return detailPane{lines: lines, actions: actions}
+	}
+
+	return detailPane{}
+}
+
+// detailHeight is the rows the viewport gets: the pane less the top and the
+// actions line under a blank one.
+func detailHeight(pane detailPane, body int) int {
+	return max(0, body-len(pane.top)-2)
+}
+
+// syncDetail loads the selection's detail into the viewport, sized to its
+// pane, and scrolls back to the top when the selection changes. Update runs
+// it after every message, so a scroll key always has the detail on screen.
+func (m *model) syncDetail() {
+	_, width := m.paneWidths()
+	pane := m.selectionDetail(width, m.bodyHeight())
+
+	m.detail.SetWidth(max(0, width-2))
+	m.detail.SetHeight(detailHeight(pane, m.bodyHeight()))
+	m.detail.SetContentLines(pane.lines)
+
+	if sel := m.selection(); sel != m.detailFor {
+		m.detailFor = sel
+		m.detail.GotoTop()
+	}
+}
+
+// detailView is the detail pane: the key reference, or the selection's
+// detail with its scrolling part from the viewport.
+func (m model) detailView(width, body int) []string {
+	if m.showKeys {
+		return referenceLines()
+	}
+
+	pane := m.selectionDetail(width, body)
+	if pane.lines == nil && pane.top == nil {
+		return nil
+	}
+
+	lines := append(pane.top, m.scrolled()...)
+
+	return append(lines, "", pane.actions)
+}
+
+// scrolled is the viewport's visible lines, with a scrollbar down the
+// pane's right edge when the detail runs longer than the pane.
+func (m model) scrolled() []string {
+	height, total := m.detail.Height(), m.detail.TotalLineCount()
+	if height <= 0 {
+		return nil
+	}
+
+	lines := strings.Split(m.detail.View(), "\n")
+	if total <= height {
+		return lines
+	}
+
+	thumb := max(1, height*height/total)
+	top := int(math.Round(float64(height-thumb) * m.detail.ScrollPercent()))
+
+	for i := range lines {
+		if i >= top && i < top+thumb {
+			lines[i] += " " + linkText.Render("┃")
+		} else {
+			lines[i] += " " + hairlineText.Render("│")
+		}
+	}
+
+	return lines
 }
 
 func feedNotice(done bool, err error, what string) []string {
@@ -906,31 +1102,13 @@ func field(label, value string) string {
 	return labelText.Render(pad(strings.ToUpper(label), 11)) + whiteText.Render(value)
 }
 
-// withActions pins an action line to the bottom of a detail pane, cutting the
-// content above it to fit.
-func withActions(content []string, actions string, body int) []string {
-	room := max(0, body-2)
-	if len(content) > room {
-		content = append(content[:max(0, room-1)], mutedText.Render("…"))
-	}
-
-	for len(content) < room {
-		content = append(content, "")
-	}
-
-	return append(content, "", actions)
+// action is one `key  label` of a detail pane's action line.
+func action(b key.Binding, label string) string {
+	return linkText.Render(b.Help().Key) + "  " + mutedText.Render(label)
 }
 
-func action(key, label string) string {
-	return linkText.Render(key) + "  " + mutedText.Render(label)
-}
-
-func jobDetail(board Board, j Job, width, body int) []string {
-	if width <= 0 {
-		return nil
-	}
-
-	lines := wrapStyled(j.Role, width, boldText)
+func jobDetail(board Board, j Job, width int) (lines []string, actions string) {
+	lines = wrapStyled(j.Role, width, boldText)
 	lines = append(lines,
 		secondaryText.Render(j.Employer)+mutedText.Render("  ·  "+j.Location),
 		"",
@@ -943,24 +1121,20 @@ func jobDetail(board Board, j Job, width, body int) []string {
 	)
 	lines = append(lines, wrapStyled(j.Description, width, secondaryText)...)
 
-	return withActions(lines, action("enter", "apply on "+hostOf(j.ApplyURL))+"   "+action("c", "copy link"), body)
+	return lines, action(keys.Open, "apply on "+hostOf(j.ApplyURL)) + "   " + action(keys.Copy, "copy link")
 }
 
 // mapDetail is a detail pane under the chapter map, with the selection's
 // city lit. The map draws in during the intro and the text lands after it; a
 // pane too short for both drops the map.
-func (m model) mapDetail(lines []string, actions string, width, body int) []string {
-	if width <= 0 {
-		return nil
-	}
-
+func (m model) mapDetail(lines []string, actions string, width, body int) detailPane {
 	if m.intro < introFrames {
 		lines, actions = nil, ""
 	}
 
 	rows := min(16, width*14/58, body-16)
 	if rows < 6 {
-		return withActions(lines, actions, body)
+		return detailPane{lines: lines, actions: actions}
 	}
 
 	size := [2]int{width, rows}
@@ -980,16 +1154,10 @@ func (m model) mapDetail(lines []string, actions string, width, body int) []stri
 		frame.ring = pingFrames - m.ping + 1
 	}
 
-	content := append(m.masks[size].render(m.chapters, frame), "")
-
-	return withActions(append(content, lines...), actions, body)
+	return detailPane{top: append(m.masks[size].render(m.chapters, frame), ""), lines: lines, actions: actions}
 }
 
 func eventDetail(e Event, width int) (lines []string, actions string) {
-	if width <= 0 {
-		return nil, ""
-	}
-
 	lines = wrapStyled(e.Title, width, boldText)
 	lines = append(lines, "", field("When", strings.TrimSpace(e.Date+"  "+deref(e.Time))), field("Chapter", cmp.Or(deref(e.City), "Online")))
 
@@ -999,19 +1167,19 @@ func eventDetail(e Event, width int) (lines []string, actions string) {
 
 	lines = append(lines, "")
 
-	keys := []string{action("enter", "rsvp on "+hostOf(e.URL))}
+	acts := []string{action(keys.Open, "rsvp on "+hostOf(e.URL))}
 
 	for i, link := range e.Links {
 		lines = append(lines, field(link.Label, displayURL(link.URL)))
 
 		if i == 0 {
-			keys[0] = action("enter", "rsvp on "+link.Label)
-		} else if key := linkKey(link); key != "" {
-			keys = append(keys, action(key, link.Label))
+			acts[0] = action(keys.Open, "rsvp on "+link.Label)
+		} else if b, ok := listingKey(link); ok {
+			acts = append(acts, action(b, link.Label))
 		}
 	}
 
-	return lines, strings.Join(append(keys, action("c", "copy link")), "   ")
+	return lines, strings.Join(append(acts, action(keys.Copy, "copy link")), "   ")
 }
 
 func chapterRow(c Chapter, next *Event, selected bool, width int) string {
@@ -1031,10 +1199,6 @@ func chapterRow(c Chapter, next *Event, selected bool, width int) string {
 }
 
 func chapterDetail(c Chapter, next *Event, width int) (lines []string, actions string) {
-	if width <= 0 {
-		return nil, ""
-	}
-
 	lines = []string{boldText.Render(c.Name), mutedText.Render(deref(c.RegionName)), ""}
 
 	if next != nil {
@@ -1046,26 +1210,23 @@ func chapterDetail(c Chapter, next *Event, width int) (lines []string, actions s
 		}
 	}
 
-	keys := []string{action("enter", "chapter page")}
+	acts := []string{action(keys.Open, "chapter page")}
 
 	if c.Meetup != nil {
 		lines = append(lines, field("Meetup", displayURL(*c.Meetup)))
-		keys = append(keys, action("m", "Meetup group"))
+		acts = append(acts, action(keys.Meetup, "Meetup group"))
 	}
 
 	lines = append(lines, field("Page", displayURL(c.PageURL())))
 
-	return lines, strings.Join(append(keys, action("c", "copy link")), "   ")
+	return lines, strings.Join(append(acts, action(keys.Copy, "copy link")), "   ")
 }
 
-func joinDetail(link joinLink, width, body int) []string {
-	if width <= 0 {
-		return nil
-	}
+func joinDetail(link joinLink, width int) (lines []string, actions string) {
+	lines = []string{boldText.Render(link.label), secondaryText.Render(link.about), ""}
+	lines = append(lines, wrapStyled(displayURL(link.url), width, linkText)...)
 
-	lines := []string{boldText.Render(link.label), secondaryText.Render(link.about), "", linkText.Render(displayURL(link.url))}
-
-	return withActions(lines, action("enter", "open in your browser"), body)
+	return lines, action(keys.Open, "open in your browser")
 }
 
 // ---------- layout helpers ----------
