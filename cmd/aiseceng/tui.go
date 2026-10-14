@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand/v2"
+	"slices"
 	"strings"
 	"time"
 
@@ -22,9 +23,10 @@ import (
 //
 // Motion is one-shot by design. The banner decodes once at launch, then the
 // map's land sweeps in, its chapters light up and the first rows cascade in;
-// selecting another city pings it for three frames. After that nothing
-// ticks, so an idle TUI costs no redraws. The search cursor is steady rather
-// than blinking for the same reason.
+// selecting another city pings it for three frames. A spring (motion.go)
+// slides the tab rule to a new tab and stops once it settles. When nothing
+// is moving nothing ticks, so an idle TUI costs no redraws. The search cursor
+// is steady rather than blinking for the same reason.
 
 type tab int
 
@@ -108,6 +110,7 @@ type model struct {
 	frame    int
 	intro    int
 	ping     int
+	rule     tabRule
 	ticking  bool
 	rng      *rand.Rand
 	status   string
@@ -119,6 +122,7 @@ func newModel(ctx context.Context) model {
 		ctx:      ctx,
 		masks:    map[[2]int]*landMask{},
 		inSplash: true,
+		rule:     newTabRule(),
 		ticking:  true,
 		rng:      rand.New(rand.NewPCG(1, 2)),
 		now:      time.Now(),
@@ -197,7 +201,23 @@ func open(url string) tea.Cmd {
 // ---------- update ----------
 
 func (m model) animating() bool {
-	return (m.inSplash && m.frame < splashFrames) || (!m.inSplash && (m.intro < introFrames || m.ping > 0))
+	return (m.inSplash && m.frame < splashFrames) || (!m.inSplash && (m.intro < introFrames || m.ping > 0 || m.moving()))
+}
+
+func (m model) moving() bool {
+	return m.rule.moving()
+}
+
+// stepMotion moves every spring one frame. The rule's targets follow the tab
+// bar, whose labels widen as counts arrive.
+func (m *model) stepMotion() {
+	if m.rule.moving() {
+		span := tabSpans(m.tabLabels())[m.tab]
+		m.rule.left.target, m.rule.right.target = float64(span[0]), float64(span[1])
+	}
+
+	m.rule.left.step()
+	m.rule.right.step()
 }
 
 // leaveSplash ends the splash once the banner has decoded and every read has
@@ -263,8 +283,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.intro == introFrames && m.highlight() != nil {
 				m.ping = pingFrames
 			}
+
+			m.stepMotion()
 		default:
 			m.ping = max(0, m.ping-1)
+			m.stepMotion()
 		}
 
 		if m.animating() {
@@ -282,18 +305,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		m.status = ""
-		before := m.highlight()
+		before, beforeTab := m.highlight(), m.tab
 
 		next, cmd := m.handleKey(msg)
 		m = next.(model)
 
+		if m.tab != beforeTab {
+			m.rule.slide(tabSpans(m.tabLabels()), beforeTab, m.tab)
+		}
+
 		// Moving onto another city pings it, once the map has drawn in.
 		if after := m.highlight(); after != nil && m.intro >= introFrames && (before == nil || before.Slug != after.Slug) {
 			m.ping = pingFrames
-			cmd = tea.Batch(cmd, m.resumeFrames())
 		}
 
-		return m, cmd
+		return m, tea.Batch(cmd, m.resumeFrames())
 	}
 
 	return m, nil
@@ -661,44 +687,115 @@ func (m model) header() []string {
 	return lines
 }
 
-// tabBar is the wordmark and tabs, with a coral rule under the active tab,
-// width cells wide.
-func (m model) tabBar(width int) []string {
-	top := " " + boldText.Render("aiseceng") + "    "
-	under := strings.Repeat(" ", ansi.StringWidth(top))
+// tabLabels is each tab's name, with its count once its feed has loaded.
+func (m model) tabLabels() []string {
+	labels := slices.Clone(tabNames[:])
 
-	var counts [len(tabNames)]string
 	if m.eventsDone && m.eventsErr == nil {
-		counts[eventsTab] = fmt.Sprintf(" %d", len(m.events))
+		labels[eventsTab] += fmt.Sprintf(" %d", len(m.events))
 	}
 
 	if m.boardDone && m.boardErr == nil {
-		counts[jobsTab] = fmt.Sprintf(" %d", len(m.board.Jobs))
+		labels[jobsTab] += fmt.Sprintf(" %d", len(m.board.Jobs))
 	}
 
 	if m.chaptersDone && m.chaptersErr == nil {
-		counts[chaptersTab] = fmt.Sprintf(" %d", len(m.chapters))
+		labels[chaptersTab] += fmt.Sprintf(" %d", len(m.chapters))
 	}
 
-	for i, name := range tabNames {
-		label := name + counts[i]
-		width := ansi.StringWidth(label)
+	return labels
+}
 
+// tabLead is the wordmark before the tabs.
+var tabLead = " " + boldText.Render("aiseceng") + "    "
+
+// tabSpans is the cells each label covers in the tab bar, [start, end).
+func tabSpans(labels []string) [][2]int {
+	spans := make([][2]int, len(labels))
+	x := ansi.StringWidth(tabLead)
+
+	for i, label := range labels {
+		spans[i] = [2]int{x, x + ansi.StringWidth(label)}
+		x = spans[i][1] + 3
+	}
+
+	return spans
+}
+
+// tabBar is the wordmark and tabs over a hairline, width cells wide, with a
+// coral rule under the active tab, or sliding to it.
+func (m model) tabBar(width int) []string {
+	labels := m.tabLabels()
+	spans := tabSpans(labels)
+	top := tabLead
+
+	for i, label := range labels {
 		if tab(i) == m.tab {
-			top += boldText.Render(label)
-			under += linkText.Render(strings.Repeat("━", width))
+			top += boldText.Render(label) + "   "
 		} else {
-			top += mutedText.Render(label)
-			under += hairlineText.Render(strings.Repeat("─", width))
+			top += mutedText.Render(label) + "   "
+		}
+	}
+
+	left, right := float64(spans[m.tab][0]), float64(spans[m.tab][1])
+	if m.rule.moving() {
+		left, right = m.rule.left.pos, m.rule.right.pos
+	}
+
+	// Each cell is the rule, half of it at an edge (╺ ╸), the hairline under
+	// a label and past the last, or a gap.
+	hairlineFrom := spans[len(spans)-1][1] + 3
+	under := make([]styledRune, max(0, width))
+
+	for x := range under {
+		cover := min(float64(x+1), right) - max(float64(x), left)
+		hairline := x >= hairlineFrom || slices.ContainsFunc(spans, func(s [2]int) bool { return x >= s[0] && x < s[1] })
+
+		switch {
+		case cover >= 0.7:
+			under[x] = styledRune{'━', &linkText}
+		case cover >= 0.3 && left > float64(x):
+			under[x] = styledRune{'╺', &linkText}
+		case cover >= 0.3:
+			under[x] = styledRune{'╸', &linkText}
+		case hairline:
+			under[x] = styledRune{'─', &hairlineText}
+		default:
+			under[x] = styledRune{' ', nil}
+		}
+	}
+
+	return []string{fit(top, width), renderRunes(under)}
+}
+
+// styledRune is one cell of a line drawn cell by cell; a nil style is plain.
+type styledRune struct {
+	r     rune
+	style *lipgloss.Style
+}
+
+// renderRunes draws a line of cells, styling each run of cells that share a
+// style once.
+func renderRunes(cells []styledRune) string {
+	var b, run strings.Builder
+
+	for i, c := range cells {
+		run.WriteRune(c.r)
+
+		if i < len(cells)-1 && cells[i+1].style == c.style {
+			continue
 		}
 
-		top += "   "
-		under += "   "
+		if c.style == nil {
+			b.WriteString(run.String())
+		} else {
+			b.WriteString(c.style.Render(run.String()))
+		}
+
+		run.Reset()
 	}
 
-	under += hairlineText.Render(strings.Repeat("─", max(0, width-ansi.StringWidth(under))))
-
-	return []string{fit(top, width), under}
+	return b.String()
 }
 
 func (m model) searchLine(width int) string {

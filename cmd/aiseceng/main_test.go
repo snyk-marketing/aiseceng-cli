@@ -118,9 +118,9 @@ func TestRenderChaptersPrintsEachPageUnderItsChapter(t *testing.T) {
 	}
 }
 
-// Every animation must end: the launch (banner, map, cascade) and the ping
-// when the cursor lands on another city. Once each has played the TUI stops
-// asking for frames, so an idle TUI redraws nothing.
+// Every animation must end: the launch (banner, map, cascade), the ping
+// when the cursor lands on another city and the tab rule's slide. Once each
+// has played the TUI stops asking for frames, so an idle TUI redraws nothing.
 func TestTUIAnimationsSettle(t *testing.T) {
 	lisbon, sf := "aiseceng-lisbon", "aiseceng-san-francisco"
 
@@ -166,4 +166,14 @@ func TestTUIAnimationsSettle(t *testing.T) {
 	}
 
 	settle(cmd, pingFrames+1)
+
+	// A second's worth of frames is the most any spring should take.
+	const springBudget = 34
+
+	m, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if !m.(model).rule.moving() {
+		t.Fatal("want the tab rule to slide to Jobs")
+	}
+
+	settle(cmd, springBudget)
 }
