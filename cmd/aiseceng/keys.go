@@ -14,6 +14,7 @@ import (
 
 type keyMap struct {
 	Up, Down, Top, Bottom, PageUp, PageDown key.Binding
+	ScrollUp, ScrollDown                    key.Binding
 	NextTab, PrevTab, JumpTab               key.Binding
 	Search, Clear                           key.Binding
 	Open, Luma, Meetup, Copy                key.Binding
@@ -21,25 +22,27 @@ type keyMap struct {
 }
 
 var keys = keyMap{
-	Up:        key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑ k", "up")),
-	Down:      key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓ j", "down")),
-	Top:       key.NewBinding(key.WithKeys("home", "g"), key.WithHelp("g", "top")),
-	Bottom:    key.NewBinding(key.WithKeys("end", "G"), key.WithHelp("G", "bottom")),
-	PageUp:    key.NewBinding(key.WithKeys("pgup"), key.WithHelp("pgup", "page up")),
-	PageDown:  key.NewBinding(key.WithKeys("pgdown", "space"), key.WithHelp("pgdn", "page down")),
-	NextTab:   key.NewBinding(key.WithKeys("tab", "right"), key.WithHelp("tab →", "next tab")),
-	PrevTab:   key.NewBinding(key.WithKeys("shift+tab", "left"), key.WithHelp("⇧tab ←", "previous tab")),
-	JumpTab:   key.NewBinding(key.WithKeys("1", "2", "3", "4"), key.WithHelp("1-4", "jump to a tab")),
-	Search:    key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
-	Clear:     key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "clear")),
-	Open:      key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open")),
-	Luma:      key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "Luma")),
-	Meetup:    key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "Meetup")),
-	Copy:      key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "copy link")),
-	Retry:     key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "retry")),
-	Help:      key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "keys")),
-	Quit:      key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
-	ForceQuit: key.NewBinding(key.WithKeys("ctrl+c")),
+	Up:         key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑ k", "up")),
+	Down:       key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓ j", "down")),
+	Top:        key.NewBinding(key.WithKeys("home", "g"), key.WithHelp("g", "top")),
+	Bottom:     key.NewBinding(key.WithKeys("end", "G"), key.WithHelp("G", "bottom")),
+	PageUp:     key.NewBinding(key.WithKeys("pgup"), key.WithHelp("pgup", "page up")),
+	PageDown:   key.NewBinding(key.WithKeys("pgdown", "space"), key.WithHelp("pgdn", "page down")),
+	ScrollUp:   key.NewBinding(key.WithKeys("shift+up", "K"), key.WithHelp("⇧↑", "scroll up")),
+	ScrollDown: key.NewBinding(key.WithKeys("shift+down", "J"), key.WithHelp("⇧↓", "scroll down")),
+	NextTab:    key.NewBinding(key.WithKeys("tab", "right"), key.WithHelp("tab →", "next tab")),
+	PrevTab:    key.NewBinding(key.WithKeys("shift+tab", "left"), key.WithHelp("⇧tab ←", "previous tab")),
+	JumpTab:    key.NewBinding(key.WithKeys("1", "2", "3", "4"), key.WithHelp("1-4", "jump to a tab")),
+	Search:     key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
+	Clear:      key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "clear")),
+	Open:       key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open")),
+	Luma:       key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "Luma")),
+	Meetup:     key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "Meetup")),
+	Copy:       key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "copy link")),
+	Retry:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "retry")),
+	Help:       key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "keys")),
+	Quit:       key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
+	ForceQuit:  key.NewBinding(key.WithKeys("ctrl+c")),
 }
 
 // typingKeyMap is what the keys do while the search has focus; every other
@@ -116,6 +119,9 @@ var keyReference = []struct {
 		{[]key.Binding{keys.Open}, "rsvp, apply, chapter page"},
 		{[]key.Binding{keys.Luma, keys.Meetup}, "on Luma, on Meetup"},
 		{[]key.Binding{keys.Copy}, "copy the link"},
+	}},
+	{"Detail", []referenceRow{
+		{[]key.Binding{keys.ScrollUp, keys.ScrollDown}, "scroll, or use the wheel"},
 	}},
 	{"Tabs", []referenceRow{
 		{[]key.Binding{keys.NextTab, keys.PrevTab}, "next, previous"},

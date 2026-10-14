@@ -25,6 +25,7 @@ Run `aiseceng` on its own for the TUI: Events, Jobs, Chapters and Join tabs, eac
 | Key | Does |
 | :-- | :-- |
 | `↑` `↓` or `j` `k` | Move |
+| `⇧↑` `⇧↓` or the wheel | Scroll a long detail |
 | `tab`, `←` `→`, `1`-`4` | Switch tabs |
 | `/` | Search, as you type |
 | `enter` | Open the RSVP, the apply link or the chapter page |

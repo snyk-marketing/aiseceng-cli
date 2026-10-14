@@ -168,6 +168,45 @@ func TestTUIAnimationsSettle(t *testing.T) {
 	settle(cmd, pingFrames+1)
 }
 
+// The detail scrolls when it runs longer than its pane, and starts from the
+// top again for the next selection.
+func TestTUIDetailScrollsAndResets(t *testing.T) {
+	board := Board{Jobs: []Job{
+		{Role: "Staff AI Security Engineer", Employer: "Mercor", Description: strings.Repeat("Own the security of how models ship. ", 60)},
+		{Role: "Security Engineer", Employer: "Monzo"},
+	}}
+
+	var m tea.Model = newModel(context.Background())
+
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m, _ = m.Update(eventsMsg{})
+	m, _ = m.Update(boardMsg{board: board})
+	m, _ = m.Update(chaptersMsg{})
+
+	for range splashFrames + introFrames {
+		m, _ = m.Update(frameMsg{})
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModShift})
+	m, _ = m.Update(tea.MouseWheelMsg{X: 100, Button: tea.MouseWheelDown})
+
+	if detail := m.(model).detail; detail.YOffset() != 4 {
+		t.Fatalf("want ⇧↓ and a wheel notch to scroll the detail 4 lines, got %d", detail.YOffset())
+	}
+
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "┃") {
+		t.Fatalf("want a scrollbar beside the long detail, got:\n%s", view)
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+
+	if detail := m.(model).detail; detail.YOffset() != 0 {
+		t.Fatalf("want the next role's detail from the top, got offset %d", detail.YOffset())
+	}
+}
+
 // ? swaps the detail for the key reference, and esc puts the detail back.
 func TestTUIKeyReference(t *testing.T) {
 	var m tea.Model = newModel(context.Background())
