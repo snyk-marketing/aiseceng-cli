@@ -21,8 +21,9 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// version is set at release time by GoReleaser's ldflags.
-var version = "dev"
+// version is set at release time by GoReleaser's ldflags. Left empty, as in a
+// `go install` build, fang reads the module version from the build info.
+var version string
 
 const defaultJobLimit = 20
 

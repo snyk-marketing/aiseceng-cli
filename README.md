@@ -13,7 +13,7 @@ brew install snyk-marketing/tap/aiseceng
 Or with Go:
 
 ```sh
-go install github.com/snyk-marketing/aiseceng-cli@latest
+go install github.com/snyk-marketing/aiseceng-cli/cmd/aiseceng@latest
 ```
 
 Binaries for macOS, Linux and Windows are on the [releases page](https://github.com/snyk-marketing/aiseceng-cli/releases).
@@ -57,8 +57,8 @@ Two environment variables point it elsewhere, for development: `AISECENG_URL` (t
 ## Develop
 
 ```sh
-go run .          # the TUI
-go run . events   # a command
+go run ./cmd/aiseceng          # the TUI
+go run ./cmd/aiseceng events   # a command
 go test ./...
 ```
 
