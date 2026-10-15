@@ -232,3 +232,13 @@ func TestTUIKeyReference(t *testing.T) {
 		t.Fatalf("want esc to bring the role's detail back, got:\n%s", view)
 	}
 }
+
+// At 80x16 Melbourne's true cell is the sea just south of the rough Victorian
+// coast; its pin belongs on the land beside it.
+func TestMapPinsCoastalCitiesOnLand(t *testing.T) {
+	m := newLandMask(80, 16)
+
+	if x, y := m.mapCell(-37.81, 144.96); m.cells[y][x] == sea {
+		t.Fatalf("want Melbourne's pin on land, got the sea at (%d, %d)", x, y)
+	}
+}
