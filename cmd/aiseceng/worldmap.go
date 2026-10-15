@@ -3,6 +3,7 @@ package main
 import (
 	"cmp"
 	"image/color"
+	"math"
 	"slices"
 	"strings"
 
@@ -61,6 +62,9 @@ func contains(outline [][2]float64, lon, lat float64) bool {
 	return inside
 }
 
+// sea is the empty braille cell, which every cell starts as.
+const sea = '\u2800'
+
 // brailleBits is the dot each [row][column] of a braille cell sets.
 var brailleBits = [4][2]rune{{0x01, 0x08}, {0x02, 0x10}, {0x04, 0x20}, {0x40, 0x80}}
 
@@ -78,7 +82,7 @@ func newLandMask(width, height int) *landMask {
 		cells[y] = make([]rune, width)
 
 		for x := range cells[y] {
-			glyph := rune(0x2800)
+			glyph := sea
 
 			for dy := range 4 {
 				for dx := range 2 {
@@ -98,12 +102,32 @@ func newLandMask(width, height int) *landMask {
 	return &landMask{width, height, cells}
 }
 
-// mapCell is the cell a position falls in, clamped onto the map.
+// mapCell is the cell a position falls in, clamped onto the map. A coastal
+// city whose cell the rough outlines leave as sea moves to the nearest
+// neighbouring cell with land, so its pin never floats offshore.
 func (m *landMask) mapCell(lat, lon float64) (x, y int) {
-	x = int((lon + 180) / 360 * float64(m.width))
-	y = int((mapNorth - lat) / (mapNorth - mapSouth) * float64(m.height))
+	fx := (lon + 180) / 360 * float64(m.width)
+	fy := (mapNorth - lat) / (mapNorth - mapSouth) * float64(m.height)
+	x, y = min(max(int(fx), 0), m.width-1), min(max(int(fy), 0), m.height-1)
 
-	return min(max(x, 0), m.width-1), min(max(y, 0), m.height-1)
+	if m.cells[y][x] != sea {
+		return x, y
+	}
+
+	bestX, bestY, best := x, y, math.Inf(1)
+
+	for ny := max(y-1, 0); ny <= min(y+1, m.height-1); ny++ {
+		for nx := max(x-1, 0); nx <= min(x+1, m.width-1); nx++ {
+			// A cell is about twice as tall as it is wide.
+			d := math.Hypot(float64(nx)+0.5-fx, 2*(float64(ny)+0.5-fy))
+
+			if m.cells[ny][nx] != sea && d < best {
+				bestX, bestY, best = nx, ny, d
+			}
+		}
+	}
+
+	return bestX, bestY
 }
 
 // mapFrame is what one frame of the map shows.
