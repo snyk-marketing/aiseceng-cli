@@ -251,7 +251,7 @@ func (m model) update(msg tea.Msg) (model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		for i := range m.inputs {
-			m.inputs[i].SetWidth(max(10, m.width-m.logoInset()-24))
+			m.inputs[i].SetWidth(max(10, m.width-24))
 		}
 
 		m.clampScroll()
@@ -708,29 +708,9 @@ func (m model) mainView() string {
 	return strings.Join(lines, "\n")
 }
 
-// logoInset is how many columns the logo takes beside the header, on terminals
-// wide enough to spare them.
-func (m model) logoInset() int {
-	if m.width < splitWidth {
-		return 0
-	}
-
-	return logoWidth + 2
-}
-
-// header is the tab bar, the search line and a blank line, with the logo
-// beside them when there is room.
+// header is the tab bar, the search line and a blank line.
 func (m model) header() []string {
-	inset := m.logoInset()
-	lines := append(m.tabBar(m.width-inset), m.searchLine(m.width-inset), "")
-
-	if inset > 0 {
-		for i := range lines {
-			lines[i] = " " + logoRows[i] + " " + lines[i]
-		}
-	}
-
-	return lines
+	return append(m.tabBar(), m.searchLine(), "")
 }
 
 // paneWidths is the list's width and the detail pane's, which is 0 in a
@@ -745,9 +725,8 @@ func (m model) paneWidths() (list, detail int) {
 	return list, m.width - list - 4
 }
 
-// tabBar is the wordmark and tabs, with a coral rule under the active tab,
-// width cells wide.
-func (m model) tabBar(width int) []string {
+// tabBar is the wordmark and tabs, with a coral rule under the active tab.
+func (m model) tabBar() []string {
 	top := " " + boldText.Render("aiseceng") + "    "
 	under := strings.Repeat(" ", ansi.StringWidth(top))
 
@@ -780,12 +759,12 @@ func (m model) tabBar(width int) []string {
 		under += "   "
 	}
 
-	under += hairlineText.Render(strings.Repeat("─", max(0, width-ansi.StringWidth(under))))
+	under += hairlineText.Render(strings.Repeat("─", max(0, m.width-ansi.StringWidth(under))))
 
-	return []string{fit(top, width), under}
+	return []string{fit(top, m.width), under}
 }
 
-func (m model) searchLine(width int) string {
+func (m model) searchLine() string {
 	input := m.input()
 	if input == nil {
 		return ""
@@ -800,7 +779,7 @@ func (m model) searchLine(width int) string {
 	count := mutedText.Render(fmt.Sprintf("%d of %d ", position, total))
 	left := " " + linkText.Render("/") + " " + input.View()
 
-	return fit(left, width-ansi.StringWidth(count)) + count
+	return fit(left, m.width-ansi.StringWidth(count)) + count
 }
 
 func (m model) keyBar() string {
