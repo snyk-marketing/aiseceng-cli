@@ -3,6 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -166,6 +171,42 @@ func TestTUIAnimationsSettle(t *testing.T) {
 	}
 
 	settle(cmd, pingFrames+1)
+}
+
+// The board's pages are read side by side but kept in order, and an empty
+// page ends the board even when `total` claims more.
+func TestFetchJobsReadsEveryPageInOrder(t *testing.T) {
+	const roles, claimed = 250, 1000
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+
+		items := []Job{}
+		for i := offset; i < min(offset+jobPageSize, roles); i++ {
+			items = append(items, Job{ID: fmt.Sprint(i)})
+		}
+
+		json.NewEncoder(w).Encode(map[string]any{"items": items, "pagination": map[string]int{"total": claimed}})
+	}))
+	defer server.Close()
+
+	defer func(url string) { jobsAPIURL = url }(jobsAPIURL)
+	jobsAPIURL = server.URL
+
+	jobs, err := fetchJobs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(jobs) != roles {
+		t.Fatalf("want %d roles, got %d", roles, len(jobs))
+	}
+
+	for i, j := range jobs {
+		if j.ID != fmt.Sprint(i) {
+			t.Fatalf("want role %d at position %d, got %s", i, i, j.ID)
+		}
+	}
 }
 
 // The detail scrolls when it runs longer than its pane, and starts from the
