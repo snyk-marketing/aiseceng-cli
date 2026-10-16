@@ -878,11 +878,12 @@ func (m model) listRows(width, body int) []string {
 	return rows[min(offset, len(rows)):min(offset+body, len(rows))]
 }
 
-// detailPane is the selection's detail in three parts: top stays put (the
-// map), lines scroll in the viewport under it, and actions is pinned to the
-// bottom of the pane.
+// detailPane is the selection's detail in three parts: a map mapRows tall
+// stays put at the top (0 for none), lines scroll in the viewport under it,
+// and actions is pinned to the bottom of the pane. The map is drawn only by
+// detailView, so syncDetail can size the viewport without drawing it.
 type detailPane struct {
-	top     []string
+	mapRows int
 	lines   []string
 	actions string
 }
@@ -925,10 +926,15 @@ func (m model) selectionDetail(width, body int) detailPane {
 	return detailPane{}
 }
 
-// detailHeight is the rows the viewport gets: the pane less the top and the
-// actions line under a blank one.
+// detailHeight is the rows the viewport gets: the pane less the map and the
+// blank line under it, and the actions line under a blank one.
 func detailHeight(pane detailPane, body int) int {
-	return max(0, body-len(pane.top)-2)
+	top := 0
+	if pane.mapRows > 0 {
+		top = pane.mapRows + 1
+	}
+
+	return max(0, body-top-2)
 }
 
 // syncDetail loads the selection's detail into the viewport, sized to its
@@ -956,11 +962,16 @@ func (m model) detailView(width, body int) []string {
 	}
 
 	pane := m.selectionDetail(width, body)
-	if pane.lines == nil && pane.top == nil {
+	if pane.lines == nil && pane.mapRows == 0 {
 		return nil
 	}
 
-	lines := append(pane.top, m.scrolled()...)
+	var lines []string
+	if pane.mapRows > 0 {
+		lines = append(m.chapterMap(width, pane.mapRows), "")
+	}
+
+	lines = append(lines, m.scrolled()...)
 
 	return append(lines, "", pane.actions)
 }
@@ -1103,9 +1114,9 @@ func jobDetail(board Board, j Job, width int) (lines []string, actions string) {
 	return lines, action(keys.Open, "apply on "+hostOf(j.ApplyURL)) + "   " + action(keys.Copy, "copy link")
 }
 
-// mapDetail is a detail pane under the chapter map, with the selection's
-// city lit. The map draws in during the intro and the text lands after it; a
-// pane too short for both drops the map.
+// mapDetail is a detail pane under the chapter map. The map draws in during
+// the intro and the text lands after it; a pane too short for both drops the
+// map.
 func (m model) mapDetail(lines []string, actions string, width, body int) detailPane {
 	if m.intro < introFrames {
 		lines, actions = nil, ""
@@ -1113,9 +1124,15 @@ func (m model) mapDetail(lines []string, actions string, width, body int) detail
 
 	rows := min(16, width*14/58, body-16)
 	if rows < 6 {
-		return detailPane{lines: lines, actions: actions}
+		rows = 0
 	}
 
+	return detailPane{mapRows: rows, lines: lines, actions: actions}
+}
+
+// chapterMap is the chapter map, width by rows, as this frame of the intro
+// or the ping shows it, with the selection's city lit.
+func (m model) chapterMap(width, rows int) []string {
 	size := [2]int{width, rows}
 	if m.masks[size] == nil {
 		m.masks[size] = newLandMask(width, rows)
@@ -1133,7 +1150,7 @@ func (m model) mapDetail(lines []string, actions string, width, body int) detail
 		frame.ring = pingFrames - m.ping + 1
 	}
 
-	return detailPane{top: append(m.masks[size].render(m.chapters, frame), ""), lines: lines, actions: actions}
+	return m.masks[size].render(m.chapters, frame)
 }
 
 func eventDetail(e Event, width int) (lines []string, actions string) {
