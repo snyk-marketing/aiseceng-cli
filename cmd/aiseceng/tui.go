@@ -818,10 +818,12 @@ func (m model) keyBar() string {
 	return " " + bar.ShortHelpView(bindings)
 }
 
-// listRows is the current tab's visible list rows, or a notice when it has
-// none to show.
+// listRows is the current tab's rows in the visible window, or a notice when
+// it has none to show. Only the window is rendered, however long the list.
 func (m model) listRows(width, body int) []string {
-	var rows []string
+	var count int
+
+	var row func(i int, selected bool) string
 
 	switch m.tab {
 	case eventsTab:
@@ -838,9 +840,7 @@ func (m model) listRows(width, body int) []string {
 			return emptyNotice("events")
 		}
 
-		for i := range events {
-			rows = append(rows, eventRow(events, i, i == m.cursor[eventsTab], width))
-		}
+		count, row = len(events), func(i int, selected bool) string { return eventRow(events, i, selected, width) }
 	case jobsTab:
 		if notice := feedNotice(m.boardDone, m.boardErr, "roles"); notice != nil {
 			return notice
@@ -851,9 +851,7 @@ func (m model) listRows(width, body int) []string {
 			return emptyNotice("roles")
 		}
 
-		for i, j := range jobs {
-			rows = append(rows, jobRow(j, i == m.cursor[jobsTab], width, m.now))
-		}
+		count, row = len(jobs), func(i int, selected bool) string { return jobRow(jobs[i], selected, width, m.now) }
 	case chaptersTab:
 		if notice := feedNotice(m.chaptersDone, m.chaptersErr, "chapters"); notice != nil {
 			return notice
@@ -864,18 +862,22 @@ func (m model) listRows(width, body int) []string {
 			return emptyNotice("chapters")
 		}
 
-		for i, c := range chapters {
-			rows = append(rows, chapterRow(c, nextMeetup(m.events, c), i == m.cursor[chaptersTab], width))
+		count, row = len(chapters), func(i int, selected bool) string {
+			return chapterRow(chapters[i], nextMeetup(m.events, chapters[i]), selected, width)
 		}
 	default:
-		for i, link := range joinLinks() {
-			rows = append(rows, joinRow(link, i == m.cursor[joinTab], width))
-		}
+		links := joinLinks()
+		count, row = len(links), func(i int, selected bool) string { return joinRow(links[i], selected, width) }
 	}
 
-	offset := m.offset[m.tab]
+	offset := min(m.offset[m.tab], count)
+	rows := make([]string, 0, min(body, count-offset))
 
-	return rows[min(offset, len(rows)):min(offset+body, len(rows))]
+	for i := offset; i < min(offset+body, count); i++ {
+		rows = append(rows, row(i, i == m.cursor[m.tab]))
+	}
+
+	return rows
 }
 
 // detailPane is the selection's detail in three parts: a map mapRows tall
