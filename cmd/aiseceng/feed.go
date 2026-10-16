@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -177,7 +178,10 @@ func fetchChapters(ctx context.Context) ([]Chapter, error) {
 // jobPageSize is the API's largest page.
 const jobPageSize = 100
 
-// fetchBoard reads every role, page by page, alongside the tag vocabulary.
+// jobPagesAtOnce is how many pages of the board are read side by side.
+const jobPagesAtOnce = 4
+
+// fetchBoard reads every role alongside the tag vocabulary.
 func fetchBoard(ctx context.Context) (Board, error) {
 	board := Board{labels: map[string]string{}}
 
@@ -199,34 +203,10 @@ func fetchBoard(ctx context.Context) (Board, error) {
 		return err
 	})
 
-	g.Go(func() error {
-		for {
-			page, err := getJSON[struct {
-				Items      []Job
-				Pagination *struct{ Total int }
-			}](ctx, fmt.Sprintf("%s/v1/jobs?limit=%d&offset=%d", jobsAPIURL, jobPageSize, len(board.Jobs)))
-			if err != nil {
-				return err
-			}
+	g.Go(func() (err error) {
+		board.Jobs, err = fetchJobs(ctx)
 
-			// An empty page ends the walk whatever `total` claimed, so a count the
-			// pages cannot satisfy cannot spin forever.
-			if len(page.Items) == 0 {
-				return nil
-			}
-
-			// Without a count, a full page could be the whole board or its first
-			// slice, and showing a slice as the board would be a quiet lie.
-			if page.Pagination == nil {
-				return fmt.Errorf("%s/v1/jobs left out pagination.total, so the board may be incomplete", jobsAPIURL)
-			}
-
-			board.Jobs = append(board.Jobs, page.Items...)
-
-			if len(board.Jobs) >= page.Pagination.Total {
-				return nil
-			}
-		}
+		return err
 	})
 
 	if err := g.Wait(); err != nil {
@@ -236,4 +216,67 @@ func fetchBoard(ctx context.Context) (Board, error) {
 	sortNewestFirst(board.Jobs)
 
 	return board, nil
+}
+
+type jobPage struct {
+	Items      []Job
+	Pagination *struct{ Total int }
+}
+
+func fetchJobPage(ctx context.Context, offset int) (jobPage, error) {
+	return getJSON[jobPage](ctx, fmt.Sprintf("%s/v1/jobs?limit=%d&offset=%d", jobsAPIURL, jobPageSize, offset))
+}
+
+// fetchJobs reads every role: the first page for the count, then the rest
+// side by side, jobPagesAtOnce at a time.
+func fetchJobs(ctx context.Context) ([]Job, error) {
+	first, err := fetchJobPage(ctx, 0)
+	if err != nil || len(first.Items) == 0 {
+		return nil, err
+	}
+
+	// Without a count, a full page could be the whole board or its first
+	// slice, and showing a slice as the board would be a quiet lie.
+	if first.Pagination == nil {
+		return nil, fmt.Errorf("%s/v1/jobs left out pagination.total, so the board may be incomplete", jobsAPIURL)
+	}
+
+	g, ctx := errgroup.WithContext(ctx)
+	g.SetLimit(jobPagesAtOnce)
+
+	// An empty page ends the board whatever `total` claimed, so a count the
+	// pages cannot satisfy stops the reads rather than running on.
+	var ended atomic.Bool
+
+	// Pages step by the first page's size, in case the API serves fewer than
+	// asked for. Each read fills its own slot, kept in board order.
+	step := len(first.Items)
+	pages := []*[]Job{&first.Items}
+
+	for offset := step; offset < first.Pagination.Total && !ended.Load(); offset += step {
+		page := new([]Job)
+		pages = append(pages, page)
+
+		g.Go(func() error {
+			next, err := fetchJobPage(ctx, offset)
+			if err == nil && len(next.Items) == 0 {
+				ended.Store(true)
+			}
+
+			*page = next.Items
+
+			return err
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
+	var jobs []Job
+	for _, page := range pages {
+		jobs = append(jobs, *page...)
+	}
+
+	return jobs, nil
 }

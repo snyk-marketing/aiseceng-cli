@@ -26,9 +26,10 @@ import (
 // (worldmap.go), with the selected city lit. A detail longer than its pane
 // scrolls, and `?` swaps the detail for a reference of every key (keys.go).
 //
-// Motion is one-shot by design. The banner decodes once at launch, then the
-// map's land sweeps in, its chapters light up and the first rows cascade in;
-// selecting another city pings it for three frames. After that nothing
+// Motion is one-shot by design, and brief: the whole launch is about 630ms,
+// at 60 frames a second. The banner decodes once, then the map's land sweeps
+// in, the detail lands as its chapters light up, and the first rows cascade
+// in; selecting another city pings it for 100ms. After that nothing
 // ticks, so an idle TUI costs no redraws. The search cursor is steady rather
 // than blinking for the same reason.
 
@@ -74,17 +75,19 @@ type (
 )
 
 const (
-	frameInterval = 30 * time.Millisecond
-	// splashFrames is the banner's decode, about 600ms.
-	splashFrames = 20
-	// introFrames is the map drawing in after it, about 650ms: the land sweeps
-	// in over sweepFrames, then the chapters light up. The first rows cascade
-	// in over its first cascadeFrames.
-	introFrames   = 22
-	sweepFrames   = 12
-	cascadeFrames = 10
-	// pingFrames is the ring around a newly selected city, about 100ms.
-	pingFrames = 3
+	frameInterval = time.Second / 60
+	// splashFrames is the banner's decode.
+	splashFrames = int(280 * time.Millisecond / frameInterval)
+	// introFrames is the map drawing in after it: the land sweeps in over
+	// sweepFrames, then the chapters light up. The first rows cascade in over
+	// its first cascadeFrames.
+	sweepFrames   = int(200 * time.Millisecond / frameInterval)
+	introFrames   = sweepFrames + int(150*time.Millisecond/frameInterval)
+	cascadeFrames = int(150 * time.Millisecond / frameInterval)
+	// pingFrames is the ring around a newly selected city, which grows out to
+	// pingRadius.
+	pingFrames = int(100 * time.Millisecond / frameInterval)
+	pingRadius = 3
 	// splitWidth is the narrowest terminal that gets a detail pane.
 	splitWidth = 100
 )
@@ -218,10 +221,11 @@ func (m model) animating() bool {
 	return (m.inSplash && m.frame < splashFrames) || (!m.inSplash && (m.intro < introFrames || m.ping > 0))
 }
 
-// leaveSplash ends the splash once the banner has decoded and every read has
-// answered, either way.
+// leaveSplash ends the splash once the banner has decoded and the site's
+// feeds have answered, either way. The job board is slower and is not waited
+// for: the Jobs tab says it is loading until it lands.
 func (m *model) leaveSplash() {
-	if m.inSplash && m.frame >= splashFrames && m.eventsDone && m.boardDone && m.chaptersDone {
+	if m.inSplash && m.frame >= splashFrames && m.eventsDone && m.chaptersDone {
 		m.inSplash = false
 		m.intro = 0
 	}
@@ -266,9 +270,8 @@ func (m model) update(msg tea.Msg) (model, tea.Cmd) {
 
 	case boardMsg:
 		m.board, m.boardErr, m.boardDone = msg.board, msg.err, true
-		m.leaveSplash()
 
-		return m, m.resumeFrames()
+		return m, nil
 
 	case chaptersMsg:
 		m.chapters, m.chaptersErr, m.chaptersDone = msg.chapters, msg.err, true
@@ -658,7 +661,7 @@ func (m model) View() tea.View {
 }
 
 func (m model) splashView() string {
-	reveal := min(1, float64(m.frame)/splashFrames)
+	reveal := min(1, float64(m.frame)/float64(splashFrames))
 
 	lines := []string{
 		renderBanner(1-(1-reveal)*(1-reveal)*(1-reveal), m.rng),
@@ -667,7 +670,7 @@ func (m model) splashView() string {
 	}
 
 	if m.frame >= splashFrames {
-		lines = append(lines, "", mutedText.Render("Loading events, roles and chapters"))
+		lines = append(lines, "", mutedText.Render("Loading events and chapters"))
 	}
 
 	block := lipgloss.JoinVertical(lipgloss.Left, lines...)
@@ -818,10 +821,12 @@ func (m model) keyBar() string {
 	return " " + bar.ShortHelpView(bindings)
 }
 
-// listRows is the current tab's visible list rows, or a notice when it has
-// none to show.
+// listRows is the current tab's rows in the visible window, or a notice when
+// it has none to show. Only the window is rendered, however long the list.
 func (m model) listRows(width, body int) []string {
-	var rows []string
+	var count int
+
+	var row func(i int, selected bool) string
 
 	switch m.tab {
 	case eventsTab:
@@ -838,9 +843,7 @@ func (m model) listRows(width, body int) []string {
 			return emptyNotice("events")
 		}
 
-		for i := range events {
-			rows = append(rows, eventRow(events, i, i == m.cursor[eventsTab], width))
-		}
+		count, row = len(events), func(i int, selected bool) string { return eventRow(events, i, selected, width) }
 	case jobsTab:
 		if notice := feedNotice(m.boardDone, m.boardErr, "roles"); notice != nil {
 			return notice
@@ -851,9 +854,7 @@ func (m model) listRows(width, body int) []string {
 			return emptyNotice("roles")
 		}
 
-		for i, j := range jobs {
-			rows = append(rows, jobRow(j, i == m.cursor[jobsTab], width, m.now))
-		}
+		count, row = len(jobs), func(i int, selected bool) string { return jobRow(jobs[i], selected, width, m.now) }
 	case chaptersTab:
 		if notice := feedNotice(m.chaptersDone, m.chaptersErr, "chapters"); notice != nil {
 			return notice
@@ -864,25 +865,30 @@ func (m model) listRows(width, body int) []string {
 			return emptyNotice("chapters")
 		}
 
-		for i, c := range chapters {
-			rows = append(rows, chapterRow(c, nextMeetup(m.events, c), i == m.cursor[chaptersTab], width))
+		count, row = len(chapters), func(i int, selected bool) string {
+			return chapterRow(chapters[i], nextMeetup(m.events, chapters[i]), selected, width)
 		}
 	default:
-		for i, link := range joinLinks() {
-			rows = append(rows, joinRow(link, i == m.cursor[joinTab], width))
-		}
+		links := joinLinks()
+		count, row = len(links), func(i int, selected bool) string { return joinRow(links[i], selected, width) }
 	}
 
-	offset := m.offset[m.tab]
+	offset := min(m.offset[m.tab], count)
+	rows := make([]string, 0, min(body, count-offset))
 
-	return rows[min(offset, len(rows)):min(offset+body, len(rows))]
+	for i := offset; i < min(offset+body, count); i++ {
+		rows = append(rows, row(i, i == m.cursor[m.tab]))
+	}
+
+	return rows
 }
 
-// detailPane is the selection's detail in three parts: top stays put (the
-// map), lines scroll in the viewport under it, and actions is pinned to the
-// bottom of the pane.
+// detailPane is the selection's detail in three parts: a map mapRows tall
+// stays put at the top (0 for none), lines scroll in the viewport under it,
+// and actions is pinned to the bottom of the pane. The map is drawn only by
+// detailView, so syncDetail can size the viewport without drawing it.
 type detailPane struct {
-	top     []string
+	mapRows int
 	lines   []string
 	actions string
 }
@@ -925,10 +931,15 @@ func (m model) selectionDetail(width, body int) detailPane {
 	return detailPane{}
 }
 
-// detailHeight is the rows the viewport gets: the pane less the top and the
-// actions line under a blank one.
+// detailHeight is the rows the viewport gets: the pane less the map and the
+// blank line under it, and the actions line under a blank one.
 func detailHeight(pane detailPane, body int) int {
-	return max(0, body-len(pane.top)-2)
+	top := 0
+	if pane.mapRows > 0 {
+		top = pane.mapRows + 1
+	}
+
+	return max(0, body-top-2)
 }
 
 // syncDetail loads the selection's detail into the viewport, sized to its
@@ -956,11 +967,16 @@ func (m model) detailView(width, body int) []string {
 	}
 
 	pane := m.selectionDetail(width, body)
-	if pane.lines == nil && pane.top == nil {
+	if pane.lines == nil && pane.mapRows == 0 {
 		return nil
 	}
 
-	lines := append(pane.top, m.scrolled()...)
+	var lines []string
+	if pane.mapRows > 0 {
+		lines = append(m.chapterMap(width, pane.mapRows), "")
+	}
+
+	lines = append(lines, m.scrolled()...)
 
 	return append(lines, "", pane.actions)
 }
@@ -1103,19 +1119,25 @@ func jobDetail(board Board, j Job, width int) (lines []string, actions string) {
 	return lines, action(keys.Open, "apply on "+hostOf(j.ApplyURL)) + "   " + action(keys.Copy, "copy link")
 }
 
-// mapDetail is a detail pane under the chapter map, with the selection's
-// city lit. The map draws in during the intro and the text lands after it; a
-// pane too short for both drops the map.
+// mapDetail is a detail pane under the chapter map. The map's land sweeps in
+// during the intro and the text lands once it has; a pane too short for both
+// drops the map.
 func (m model) mapDetail(lines []string, actions string, width, body int) detailPane {
-	if m.intro < introFrames {
+	if m.intro < sweepFrames {
 		lines, actions = nil, ""
 	}
 
 	rows := min(16, width*14/58, body-16)
 	if rows < 6 {
-		return detailPane{lines: lines, actions: actions}
+		rows = 0
 	}
 
+	return detailPane{mapRows: rows, lines: lines, actions: actions}
+}
+
+// chapterMap is the chapter map, width by rows, as this frame of the intro
+// or the ping shows it, with the selection's city lit.
+func (m model) chapterMap(width, rows int) []string {
 	size := [2]int{width, rows}
 	if m.masks[size] == nil {
 		m.masks[size] = newLandMask(width, rows)
@@ -1125,15 +1147,15 @@ func (m model) mapDetail(lines []string, actions string, width, body int) detail
 
 	switch {
 	case m.intro < sweepFrames:
-		t := float64(m.intro) / sweepFrames
+		t := float64(m.intro) / float64(sweepFrames)
 		frame = mapFrame{reveal: 1 - (1-t)*(1-t)*(1-t)}
 	case m.intro < introFrames:
 		frame = mapFrame{reveal: 1, lit: len(m.chapters) * (m.intro - sweepFrames) / (introFrames - sweepFrames)}
 	case m.ping > 0:
-		frame.ring = pingFrames - m.ping + 1
+		frame.ring = 1 + (pingFrames-m.ping)*pingRadius/pingFrames
 	}
 
-	return detailPane{top: append(m.masks[size].render(m.chapters, frame), ""), lines: lines, actions: actions}
+	return m.masks[size].render(m.chapters, frame)
 }
 
 func eventDetail(e Event, width int) (lines []string, actions string) {
@@ -1172,9 +1194,7 @@ func chapterRow(c Chapter, next *Event, selected bool, width int) string {
 		when = greenText.Render("●") + " " + whiteText.Render(next.Date)
 	}
 
-	dot := lipgloss.NewStyle().Foreground(cmp.Or(regionColors[deref(c.Region)], white)).Render("●")
-
-	return selectable(selected) + dot + " " + name.Render(fit(c.Name, max(10, width-20))) + gap + when
+	return selectable(selected) + pinStyle(c).Render("●") + " " + name.Render(fit(c.Name, max(10, width-20))) + gap + when
 }
 
 func chapterDetail(c Chapter, next *Event, width int) (lines []string, actions string) {

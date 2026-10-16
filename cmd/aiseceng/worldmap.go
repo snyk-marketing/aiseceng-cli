@@ -142,18 +142,42 @@ type mapFrame struct {
 	ring int
 }
 
+// mapGlyph is one cell of a rendered map: its glyph and the style it takes.
+type mapGlyph struct {
+	glyph rune
+	style *lipgloss.Style
+}
+
+var (
+	// pinStyles is a chapter pin's style per region; see regionColors.
+	pinStyles   = map[string]*lipgloss.Style{}
+	markerStyle = linkText.Bold(true)
+)
+
+func init() {
+	for region, c := range regionColors {
+		style := lipgloss.NewStyle().Foreground(c)
+		pinStyles[region] = &style
+	}
+}
+
+// pinStyle is a chapter's pin in its region's colour, or white.
+func pinStyle(c Chapter) *lipgloss.Style {
+	return cmp.Or(pinStyles[deref(c.Region)], &whiteText)
+}
+
 func (m *landMask) render(chapters []Chapter, frame mapFrame) []string {
-	grid := make([][]string, m.height)
+	grid := make([][]mapGlyph, m.height)
 
 	for y := range grid {
-		grid[y] = make([]string, m.width)
+		grid[y] = make([]mapGlyph, m.width)
 
 		for x, glyph := range m.cells[y] {
 			if float64(x) >= frame.reveal*float64(m.width) {
-				grid[y][x] = " "
-			} else {
-				grid[y][x] = landText.Render(string(glyph))
+				glyph = ' '
 			}
+
+			grid[y][x] = mapGlyph{glyph, &landText}
 		}
 	}
 
@@ -163,7 +187,7 @@ func (m *landMask) render(chapters []Chapter, frame mapFrame) []string {
 
 	for _, c := range westToEast[:min(frame.lit, len(westToEast))] {
 		x, y := m.mapCell(c.Lat, c.Lon)
-		grid[y][x] = lipgloss.NewStyle().Foreground(cmp.Or(regionColors[deref(c.Region)], white)).Render("●")
+		grid[y][x] = mapGlyph{'●', pinStyle(c)}
 	}
 
 	if c := frame.highlight; c != nil {
@@ -172,24 +196,41 @@ func (m *landMask) render(chapters []Chapter, frame mapFrame) []string {
 		if r := frame.ring; r > 0 {
 			for _, d := range [][2]int{{-2 * r, 0}, {2 * r, 0}, {0, -r}, {0, r}, {-r, -1}, {r, -1}, {-r, 1}, {r, 1}} {
 				if px, py := x+d[0], y+d[1]; px >= 0 && px < m.width && py >= 0 && py < m.height {
-					grid[py][px] = linkText.Render("·")
+					grid[py][px] = mapGlyph{'·', &linkText}
 				}
 			}
 		}
 
-		grid[y][x] = linkText.Bold(true).Render("◉")
+		grid[y][x] = mapGlyph{'◉', &markerStyle}
 
-		for i, letter := range " " + c.City() {
+		for i, letter := range []rune(" " + c.City()) {
 			if px := x + 1 + i; px < m.width {
-				grid[y][px] = boldText.Render(string(letter))
+				grid[y][px] = mapGlyph{letter, &boldText}
 			}
 		}
 	}
 
 	lines := make([]string, m.height)
 	for y, row := range grid {
-		lines[y] = strings.Join(row, "")
+		lines[y] = renderRuns(row)
 	}
 
 	return lines
+}
+
+// renderRuns renders a row of the map with one Render per run of cells that
+// share a style, rather than one per cell: the land is most of every row.
+func renderRuns(row []mapGlyph) string {
+	var line, run strings.Builder
+
+	for x, cell := range row {
+		run.WriteRune(cell.glyph)
+
+		if x == len(row)-1 || row[x+1].style != cell.style {
+			line.WriteString(cell.style.Render(run.String()))
+			run.Reset()
+		}
+	}
+
+	return line.String()
 }
