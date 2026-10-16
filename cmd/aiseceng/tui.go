@@ -26,9 +26,10 @@ import (
 // (worldmap.go), with the selected city lit. A detail longer than its pane
 // scrolls, and `?` swaps the detail for a reference of every key (keys.go).
 //
-// Motion is one-shot by design. The banner decodes once at launch, then the
-// map's land sweeps in, its chapters light up and the first rows cascade in;
-// selecting another city pings it for three frames. After that nothing
+// Motion is one-shot by design, and brief: the whole launch is about 630ms,
+// at 60 frames a second. The banner decodes once, then the map's land sweeps
+// in, the detail lands as its chapters light up, and the first rows cascade
+// in; selecting another city pings it for 100ms. After that nothing
 // ticks, so an idle TUI costs no redraws. The search cursor is steady rather
 // than blinking for the same reason.
 
@@ -74,17 +75,19 @@ type (
 )
 
 const (
-	frameInterval = 30 * time.Millisecond
-	// splashFrames is the banner's decode, about 600ms.
-	splashFrames = 20
-	// introFrames is the map drawing in after it, about 650ms: the land sweeps
-	// in over sweepFrames, then the chapters light up. The first rows cascade
-	// in over its first cascadeFrames.
-	introFrames   = 22
-	sweepFrames   = 12
-	cascadeFrames = 10
-	// pingFrames is the ring around a newly selected city, about 100ms.
-	pingFrames = 3
+	frameInterval = time.Second / 60
+	// splashFrames is the banner's decode.
+	splashFrames = int(280 * time.Millisecond / frameInterval)
+	// introFrames is the map drawing in after it: the land sweeps in over
+	// sweepFrames, then the chapters light up. The first rows cascade in over
+	// its first cascadeFrames.
+	sweepFrames   = int(200 * time.Millisecond / frameInterval)
+	introFrames   = sweepFrames + int(150*time.Millisecond/frameInterval)
+	cascadeFrames = int(150 * time.Millisecond / frameInterval)
+	// pingFrames is the ring around a newly selected city, which grows out to
+	// pingRadius.
+	pingFrames = int(100 * time.Millisecond / frameInterval)
+	pingRadius = 3
 	// splitWidth is the narrowest terminal that gets a detail pane.
 	splitWidth = 100
 )
@@ -658,7 +661,7 @@ func (m model) View() tea.View {
 }
 
 func (m model) splashView() string {
-	reveal := min(1, float64(m.frame)/splashFrames)
+	reveal := min(1, float64(m.frame)/float64(splashFrames))
 
 	lines := []string{
 		renderBanner(1-(1-reveal)*(1-reveal)*(1-reveal), m.rng),
@@ -1116,11 +1119,11 @@ func jobDetail(board Board, j Job, width int) (lines []string, actions string) {
 	return lines, action(keys.Open, "apply on "+hostOf(j.ApplyURL)) + "   " + action(keys.Copy, "copy link")
 }
 
-// mapDetail is a detail pane under the chapter map. The map draws in during
-// the intro and the text lands after it; a pane too short for both drops the
-// map.
+// mapDetail is a detail pane under the chapter map. The map's land sweeps in
+// during the intro and the text lands once it has; a pane too short for both
+// drops the map.
 func (m model) mapDetail(lines []string, actions string, width, body int) detailPane {
-	if m.intro < introFrames {
+	if m.intro < sweepFrames {
 		lines, actions = nil, ""
 	}
 
@@ -1144,12 +1147,12 @@ func (m model) chapterMap(width, rows int) []string {
 
 	switch {
 	case m.intro < sweepFrames:
-		t := float64(m.intro) / sweepFrames
+		t := float64(m.intro) / float64(sweepFrames)
 		frame = mapFrame{reveal: 1 - (1-t)*(1-t)*(1-t)}
 	case m.intro < introFrames:
 		frame = mapFrame{reveal: 1, lit: len(m.chapters) * (m.intro - sweepFrames) / (introFrames - sweepFrames)}
 	case m.ping > 0:
-		frame.ring = pingFrames - m.ping + 1
+		frame.ring = 1 + (pingFrames-m.ping)*pingRadius/pingFrames
 	}
 
 	return m.masks[size].render(m.chapters, frame)
