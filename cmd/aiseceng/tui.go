@@ -1172,9 +1172,7 @@ func chapterRow(c Chapter, next *Event, selected bool, width int) string {
 		when = greenText.Render("●") + " " + whiteText.Render(next.Date)
 	}
 
-	dot := lipgloss.NewStyle().Foreground(cmp.Or(regionColors[deref(c.Region)], white)).Render("●")
-
-	return selectable(selected) + dot + " " + name.Render(fit(c.Name, max(10, width-20))) + gap + when
+	return selectable(selected) + pinStyle(c).Render("●") + " " + name.Render(fit(c.Name, max(10, width-20))) + gap + when
 }
 
 func chapterDetail(c Chapter, next *Event, width int) (lines []string, actions string) {
