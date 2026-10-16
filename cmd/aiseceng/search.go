@@ -29,36 +29,43 @@ func matches(haystack []string, query []string) bool {
 	})
 }
 
+// search keeps the items whose text matches query. An empty query keeps
+// everything, and hands back items itself rather than a copy.
+func search[T any](items []T, query string, text func(T) string) []T {
+	q := words(query)
+	if len(q) == 0 {
+		return items
+	}
+
+	return slices.DeleteFunc(slices.Clone(items), func(item T) bool {
+		return !matches(words(text(item)), q)
+	})
+}
+
 // searchJobs keeps the roles matching query in their role, employer,
 // location, or any tag's name: region, seniority, focus area, employer type.
 func searchJobs(board Board, query string) []Job {
-	q := words(query)
-
-	return slices.DeleteFunc(slices.Clone(board.Jobs), func(j Job) bool {
+	return search(board.Jobs, query, func(j Job) string {
 		tags := append(board.Labels(j.Regions), board.Labels(j.TechnicalDomains)...)
 		tags = append(tags, board.Label(j.Seniority), board.Label(j.EmployerType))
 
-		return !matches(words(j.Role+" "+j.Employer+" "+j.Location+" "+strings.Join(tags, " ")), q)
+		return j.Role + " " + j.Employer + " " + j.Location + " " + strings.Join(tags, " ")
 	})
 }
 
 // searchEvents keeps the events matching query in their title, city, venue
 // or date ("oct", "today").
 func searchEvents(events []Event, query string) []Event {
-	q := words(query)
-
-	return slices.DeleteFunc(slices.Clone(events), func(e Event) bool {
-		return !matches(words(e.Title+" "+deref(e.City)+" "+deref(e.Venue)+" "+e.Date), q)
+	return search(events, query, func(e Event) string {
+		return e.Title + " " + deref(e.City) + " " + deref(e.Venue) + " " + e.Date
 	})
 }
 
 // searchChapters keeps the chapters matching query in their name or region
 // ("lisbon", "emea", "apac").
 func searchChapters(chapters []Chapter, query string) []Chapter {
-	q := words(query)
-
-	return slices.DeleteFunc(slices.Clone(chapters), func(c Chapter) bool {
-		return !matches(words(c.Name+" "+deref(c.Region)+" "+deref(c.RegionName)), q)
+	return search(chapters, query, func(c Chapter) string {
+		return c.Name + " " + deref(c.Region) + " " + deref(c.RegionName)
 	})
 }
 
