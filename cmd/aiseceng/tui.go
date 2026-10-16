@@ -218,10 +218,11 @@ func (m model) animating() bool {
 	return (m.inSplash && m.frame < splashFrames) || (!m.inSplash && (m.intro < introFrames || m.ping > 0))
 }
 
-// leaveSplash ends the splash once the banner has decoded and every read has
-// answered, either way.
+// leaveSplash ends the splash once the banner has decoded and the site's
+// feeds have answered, either way. The job board is slower and is not waited
+// for: the Jobs tab says it is loading until it lands.
 func (m *model) leaveSplash() {
-	if m.inSplash && m.frame >= splashFrames && m.eventsDone && m.boardDone && m.chaptersDone {
+	if m.inSplash && m.frame >= splashFrames && m.eventsDone && m.chaptersDone {
 		m.inSplash = false
 		m.intro = 0
 	}
@@ -266,9 +267,8 @@ func (m model) update(msg tea.Msg) (model, tea.Cmd) {
 
 	case boardMsg:
 		m.board, m.boardErr, m.boardDone = msg.board, msg.err, true
-		m.leaveSplash()
 
-		return m, m.resumeFrames()
+		return m, nil
 
 	case chaptersMsg:
 		m.chapters, m.chaptersErr, m.chaptersDone = msg.chapters, msg.err, true
@@ -667,7 +667,7 @@ func (m model) splashView() string {
 	}
 
 	if m.frame >= splashFrames {
-		lines = append(lines, "", mutedText.Render("Loading events, roles and chapters"))
+		lines = append(lines, "", mutedText.Render("Loading events and chapters"))
 	}
 
 	block := lipgloss.JoinVertical(lipgloss.Left, lines...)

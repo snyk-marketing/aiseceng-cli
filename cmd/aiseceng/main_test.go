@@ -173,6 +173,34 @@ func TestTUIAnimationsSettle(t *testing.T) {
 	settle(cmd, pingFrames+1)
 }
 
+// The splash waits for the site's feeds but not the slower job board, which
+// lands on the Jobs tab whenever it answers.
+func TestTUISplashDoesNotWaitForTheBoard(t *testing.T) {
+	var m tea.Model = newModel(context.Background())
+
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m, _ = m.Update(eventsMsg{})
+	m, _ = m.Update(chaptersMsg{})
+
+	for range splashFrames {
+		m, _ = m.Update(frameMsg{})
+	}
+
+	if m.(model).inSplash {
+		t.Fatal("want the splash to end without the job board")
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "Loading roles") {
+		t.Fatalf("want the Jobs tab loading, got:\n%s", view)
+	}
+
+	m, _ = m.Update(boardMsg{board: testBoard})
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "AI Red Team Engineer") {
+		t.Fatalf("want the roles once the board lands, got:\n%s", view)
+	}
+}
+
 // The board's pages are read side by side but kept in order, and an empty
 // page ends the board even when `total` claims more.
 func TestFetchJobsReadsEveryPageInOrder(t *testing.T) {
