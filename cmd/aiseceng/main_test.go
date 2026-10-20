@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -234,6 +235,41 @@ func TestFetchJobsReadsEveryPageInOrder(t *testing.T) {
 		if j.ID != fmt.Sprint(i) {
 			t.Fatalf("want role %d at position %d, got %s", i, i, j.ID)
 		}
+	}
+}
+
+// The release check reuses its answer for a day, and names a release only
+// when it is newer than the running build.
+func TestNewerReleaseAsksGitHubOnceADay(t *testing.T) {
+	asked := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked++
+		w.Header().Set("Location", "https://github.com/snyk-marketing/aiseceng-cli/releases/tag/v0.2.0")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer server.Close()
+
+	defer func(url string) { releasesURL = url }(releasesURL)
+	releasesURL = server.URL
+
+	state := t.TempDir() + "/update.json"
+	ctx := context.Background()
+
+	for current, want := range map[string]string{"v0.1.8": "v0.2.0", "v0.2.0": "", "v0.2.1": ""} {
+		if got := newerRelease(ctx, current, state); got != want {
+			t.Errorf("newerRelease(%s) = %q, want %q", current, got, want)
+		}
+	}
+
+	if asked != 1 {
+		t.Fatalf("want one check a day, got %d", asked)
+	}
+
+	stale, _ := json.Marshal(updateState{CheckedAt: time.Now().Add(-updateInterval), Latest: "v0.1.9"})
+	os.WriteFile(state, stale, 0o644)
+
+	if got := newerRelease(ctx, "v0.1.8", state); got != "v0.2.0" || asked != 2 {
+		t.Fatalf("want a day-old answer checked again, got %q after %d checks", got, asked)
 	}
 }
 

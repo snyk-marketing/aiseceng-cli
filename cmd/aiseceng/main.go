@@ -45,7 +45,12 @@ use a command below to print them and exit.`,
 		},
 	}
 
-	root.AddCommand(eventsCmd(), jobsCmd(), chaptersCmd(), joinCmd())
+	commands := []*cobra.Command{eventsCmd(), jobsCmd(), chaptersCmd(), joinCmd()}
+	for _, cmd := range commands {
+		noticeUpdates(cmd)
+	}
+
+	root.AddCommand(commands...)
 
 	if err := fang.Execute(context.Background(), root, fang.WithVersion(version)); err != nil {
 		os.Exit(1)
