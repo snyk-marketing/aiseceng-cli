@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"charm.land/lipgloss/v2"
@@ -86,12 +87,38 @@ func checkForUpdate(ctx context.Context) <-chan string {
 	return found
 }
 
-// updateNotice is the line that says latest is out.
+// updateNotice is the line that says latest is out, and how to upgrade.
 func updateNotice(latest string) string {
+	notice := secondaryText.Render(fmt.Sprintf("aiseceng %s is out, you have %s: ", latest, currentVersion()))
+
+	exe, _ := os.Executable()
+	// Homebrew links bin/aiseceng to the binary in its Caskroom.
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+
+	if command := upgradeCommand(exe); command != "" {
+		return notice + linkText.Render(command)
+	}
+
 	url := releasesURL + "/latest"
 
-	return secondaryText.Render(fmt.Sprintf("aiseceng %s is out, you have %s: ", latest, currentVersion())) +
-		linkText.Hyperlink(url).Render(url)
+	return notice + linkText.Hyperlink(url).Render(url)
+}
+
+// upgradeCommand is the command that upgrades the binary at exe: Homebrew's
+// for the cask, Go's for a `go install` build, or "" for a binary downloaded
+// from the releases page.
+func upgradeCommand(exe string) string {
+	switch {
+	case strings.Contains(filepath.ToSlash(exe), "/Caskroom/"):
+		return "brew upgrade aiseceng"
+	// Only a release build has its version set by GoReleaser.
+	case version == "":
+		return "go install github.com/snyk-marketing/aiseceng-cli/cmd/aiseceng@latest"
+	default:
+		return ""
+	}
 }
 
 // currentVersion is the running build's version, such as v0.1.8, or "" for a

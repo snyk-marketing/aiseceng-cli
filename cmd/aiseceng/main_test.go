@@ -273,6 +273,29 @@ func TestNewerReleaseAsksGitHubOnceADay(t *testing.T) {
 	}
 }
 
+// The upgrade hint follows how the binary was installed.
+func TestUpgradeCommandFollowsTheInstall(t *testing.T) {
+	defer func(v string) { version = v }(version)
+
+	version = "0.1.8"
+	cases := map[string]string{
+		"/opt/homebrew/Caskroom/aiseceng/0.1.8/aiseceng":              "brew upgrade aiseceng",
+		"/home/linuxbrew/.linuxbrew/Caskroom/aiseceng/0.1.8/aiseceng": "brew upgrade aiseceng",
+		"/usr/local/bin/aiseceng":                                     "",
+	}
+
+	for exe, want := range cases {
+		if got := upgradeCommand(exe); got != want {
+			t.Errorf("upgradeCommand(%s) = %q, want %q", exe, got, want)
+		}
+	}
+
+	version = ""
+	if got := upgradeCommand("/Users/me/go/bin/aiseceng"); !strings.HasPrefix(got, "go install ") {
+		t.Errorf("want go install for a go install build, got %q", got)
+	}
+}
+
 // The detail scrolls when it runs longer than its pane, and starts from the
 // top again for the next selection.
 func TestTUIDetailScrollsAndResets(t *testing.T) {
