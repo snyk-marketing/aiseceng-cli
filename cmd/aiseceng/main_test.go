@@ -296,6 +296,29 @@ func TestUpgradeCommandFollowsTheInstall(t *testing.T) {
 	}
 }
 
+// A newer release holds the key bar until the first key press.
+func TestTUIKeyBarNamesANewerRelease(t *testing.T) {
+	var m tea.Model = newModel(context.Background())
+
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m, _ = m.Update(eventsMsg{})
+	m, _ = m.Update(chaptersMsg{})
+	m, _ = m.Update(updateMsg("v9.9.9"))
+
+	for range splashFrames + introFrames {
+		m, _ = m.Update(frameMsg{})
+	}
+
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "aiseceng v9.9.9 is out") {
+		t.Fatalf("want the key bar to name v9.9.9, got:\n%s", view)
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if view := ansi.Strip(m.View().Content); strings.Contains(view, "is out") {
+		t.Fatalf("want the keys back after a key press, got:\n%s", view)
+	}
+}
+
 // The detail scrolls when it runs longer than its pane, and starts from the
 // top again for the next selection.
 func TestTUIDetailScrollsAndResets(t *testing.T) {

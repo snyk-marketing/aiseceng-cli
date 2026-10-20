@@ -20,8 +20,9 @@ import (
 
 // The update notice: aiseceng asks GitHub for its latest release at most once
 // a day, and when that is newer than the running build, says so after a
-// command. AISECENG_NO_UPDATE_CHECK turns it off. It stays quiet in CI and
-// for builds without a release version, such as `go run`.
+// command or in the TUI's key bar. AISECENG_NO_UPDATE_CHECK turns it off. It
+// stays quiet in CI and for builds without a release version, such as
+// `go run`.
 
 // releasesURL is the repo's releases page. GitHub redirects its /latest to the
 // newest release's tag, which needs no token and has no API rate limit.

@@ -72,6 +72,8 @@ type (
 	}
 	frameMsg  struct{}
 	statusMsg string
+	// updateMsg is a newer release's tag, or "" (update.go).
+	updateMsg string
 )
 
 const (
@@ -130,7 +132,10 @@ type model struct {
 	ticking  bool
 	rng      *rand.Rand
 	status   string
-	now      time.Time
+	// newRelease is a newer release's tag, which the key bar names until
+	// the first key press.
+	newRelease string
+	now        time.Time
 }
 
 func newModel(ctx context.Context) model {
@@ -174,7 +179,7 @@ func runTUI(ctx context.Context) error {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(m.loadEvents(), m.loadBoard(), m.loadChapters(), nextFrame())
+	return tea.Batch(m.loadEvents(), m.loadBoard(), m.loadChapters(), m.checkUpdate(), nextFrame())
 }
 
 func (m model) loadEvents() tea.Cmd {
@@ -199,6 +204,10 @@ func (m model) loadChapters() tea.Cmd {
 
 		return chaptersMsg{chapters, err}
 	}
+}
+
+func (m model) checkUpdate() tea.Cmd {
+	return func() tea.Msg { return updateMsg(<-checkForUpdate(m.ctx)) }
 }
 
 func nextFrame() tea.Cmd {
@@ -308,6 +317,11 @@ func (m model) update(msg tea.Msg) (model, tea.Cmd) {
 
 		return m, nil
 
+	case updateMsg:
+		m.newRelease = string(msg)
+
+		return m, nil
+
 	case tea.MouseWheelMsg:
 		if m.inSplash {
 			return m, nil
@@ -330,7 +344,7 @@ func (m model) update(msg tea.Msg) (model, tea.Cmd) {
 		return m, m.pingMove(before)
 
 	case tea.KeyPressMsg:
-		m.status = ""
+		m.status, m.newRelease = "", ""
 		before := m.highlight()
 
 		next, cmd := m.handleKey(msg)
@@ -788,6 +802,10 @@ func (m model) searchLine() string {
 func (m model) keyBar() string {
 	if m.status != "" {
 		return " " + whiteText.Render(m.status)
+	}
+
+	if m.newRelease != "" {
+		return fit(" "+updateNotice(m.newRelease), m.width)
 	}
 
 	move := relabel(keys.Down, "↑↓", "move")
