@@ -46,6 +46,8 @@ aiseceng join                     # open the Discord
 
 Search words match the start of any word in a role, employer or location, or in a tag's name: region, seniority, focus area, employer type. Every word must match.
 
+Once a day, aiseceng also checks GitHub for a newer release, and when there is one, says so in the TUI's key bar or after a command's output. Set `AISECENG_NO_UPDATE_CHECK=1` to turn that off.
+
 ## Where the data comes from
 
 | | Source |

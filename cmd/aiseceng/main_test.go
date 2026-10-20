@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -234,6 +235,87 @@ func TestFetchJobsReadsEveryPageInOrder(t *testing.T) {
 		if j.ID != fmt.Sprint(i) {
 			t.Fatalf("want role %d at position %d, got %s", i, i, j.ID)
 		}
+	}
+}
+
+// The release check reuses its answer for a day, and names a release only
+// when it is newer than the running build.
+func TestNewerReleaseAsksGitHubOnceADay(t *testing.T) {
+	asked := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked++
+		w.Header().Set("Location", "https://github.com/snyk-marketing/aiseceng-cli/releases/tag/v0.2.0")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer server.Close()
+
+	defer func(url string) { releasesURL = url }(releasesURL)
+	releasesURL = server.URL
+
+	state := t.TempDir() + "/update.json"
+	ctx := context.Background()
+
+	for current, want := range map[string]string{"v0.1.8": "v0.2.0", "v0.2.0": "", "v0.2.1": ""} {
+		if got := newerRelease(ctx, current, state); got != want {
+			t.Errorf("newerRelease(%s) = %q, want %q", current, got, want)
+		}
+	}
+
+	if asked != 1 {
+		t.Fatalf("want one check a day, got %d", asked)
+	}
+
+	stale, _ := json.Marshal(updateState{CheckedAt: time.Now().Add(-updateInterval), Latest: "v0.1.9"})
+	os.WriteFile(state, stale, 0o644)
+
+	if got := newerRelease(ctx, "v0.1.8", state); got != "v0.2.0" || asked != 2 {
+		t.Fatalf("want a day-old answer checked again, got %q after %d checks", got, asked)
+	}
+}
+
+// The upgrade hint follows how the binary was installed.
+func TestUpgradeCommandFollowsTheInstall(t *testing.T) {
+	defer func(v string) { version = v }(version)
+
+	version = "0.1.8"
+	cases := map[string]string{
+		"/opt/homebrew/Caskroom/aiseceng/0.1.8/aiseceng":              "brew upgrade aiseceng",
+		"/home/linuxbrew/.linuxbrew/Caskroom/aiseceng/0.1.8/aiseceng": "brew upgrade aiseceng",
+		"/usr/local/bin/aiseceng":                                     "",
+	}
+
+	for exe, want := range cases {
+		if got := upgradeCommand(exe); got != want {
+			t.Errorf("upgradeCommand(%s) = %q, want %q", exe, got, want)
+		}
+	}
+
+	version = ""
+	if got := upgradeCommand("/Users/me/go/bin/aiseceng"); !strings.HasPrefix(got, "go install ") {
+		t.Errorf("want go install for a go install build, got %q", got)
+	}
+}
+
+// A newer release holds the key bar until the first key press.
+func TestTUIKeyBarNamesANewerRelease(t *testing.T) {
+	var m tea.Model = newModel(context.Background())
+
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m, _ = m.Update(eventsMsg{})
+	m, _ = m.Update(chaptersMsg{})
+	m, _ = m.Update(updateMsg("v9.9.9"))
+
+	for range splashFrames + introFrames {
+		m, _ = m.Update(frameMsg{})
+	}
+
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "aiseceng v9.9.9 is out") {
+		t.Fatalf("want the key bar to name v9.9.9, got:\n%s", view)
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if view := ansi.Strip(m.View().Content); strings.Contains(view, "is out") {
+		t.Fatalf("want the keys back after a key press, got:\n%s", view)
 	}
 }
 
